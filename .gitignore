@@ -1,21 +1,23 @@
 # This repository shares its root with a general workspace.
-# Track only the mobile approval project.
+# Track only the Pocket Approve project.
 *
 !.gitignore
 !README.md
 !REPORT.md
+!ROADMAP.md
+!SECURITY.md
 !LICENSE
-!mobile-approval/
-!mobile-approval/**
+!pocket-approve/
+!pocket-approve/**
 
 # Secrets and generated state stay out even after the project folder exists.
-mobile-approval/node_modules/
-mobile-approval/data/
-mobile-approval/.env
-mobile-approval/.env.*
-mobile-approval/**/*.pem
-mobile-approval/**/*.key
-mobile-approval/**/*.crt
-mobile-approval/**/vapid.json
-mobile-approval/**/subscriptions.json
-mobile-approval/**/token
+pocket-approve/node_modules/
+pocket-approve/data/
+pocket-approve/.env
+pocket-approve/.env.*
+pocket-approve/**/*.pem
+pocket-approve/**/*.key
+pocket-approve/**/*.crt
+pocket-approve/**/vapid.json
+pocket-approve/**/subscriptions.json
+pocket-approve/**/token
