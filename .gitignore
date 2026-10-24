@@ -1,0 +1,21 @@
+# This repository shares its root with a general workspace.
+# Track only the mobile approval project.
+*
+!.gitignore
+!README.md
+!REPORT.md
+!LICENSE
+!mobile-approval/
+!mobile-approval/**
+
+# Secrets and generated state stay out even after the project folder exists.
+mobile-approval/node_modules/
+mobile-approval/data/
+mobile-approval/.env
+mobile-approval/.env.*
+mobile-approval/**/*.pem
+mobile-approval/**/*.key
+mobile-approval/**/*.crt
+mobile-approval/**/vapid.json
+mobile-approval/**/subscriptions.json
+mobile-approval/**/token
