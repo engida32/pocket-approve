@@ -70,6 +70,10 @@ export function detectLanIp(interfaces = networkInterfaces()) {
   return candidates[0] ?? null;
 }
 
+export function chooseHost({ explicitHost = null, detectedIp = null, savedHost = null } = {}) {
+  return explicitHost ?? detectedIp ?? savedHost ?? null;
+}
+
 async function fileExists(path) {
   try {
     await stat(path);
@@ -200,7 +204,12 @@ async function main() {
   const options = parseArgs(process.argv.slice(2));
   const previous = await existingConfig();
 
-  const host = options.host ?? previous?.host ?? detectLanIp();
+  const detectedIp = detectLanIp();
+  const host = chooseHost({
+    explicitHost: options.host,
+    detectedIp,
+    savedHost: previous?.host,
+  });
   if (!host) {
     fail("could not detect a LAN IPv4 address; pass --host <ip>");
   }
