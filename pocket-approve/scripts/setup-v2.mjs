@@ -1,5 +1,5 @@
 import { execFile } from "node:child_process";
-import { chmod, mkdir } from "node:fs/promises";
+import { chmod, mkdir, rm } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { promisify } from "node:util";
@@ -7,6 +7,7 @@ import webpush from "web-push";
 import { DATA_DIR } from "../lib/config.mjs";
 import { loadConfigV2 } from "../lib/config-v2.mjs";
 import {
+  backupV2Setup,
   buildMeta,
   buildSetupConfig,
   newPairingSecret,
@@ -25,15 +26,23 @@ function usage() {
   --server-label id=label  repeatable
   --host <lan-ip>          implies --mode lan
   --no-qr
-  --force                  overwrite config (data/ is not backed up)`);
+  --force                  overwrite config (a timestamped backup is written)`);
 }
 
-async function previousConfig() {
+async function previousConfig(options) {
   try {
-    return await loadConfigV2();
+    return { previous: await loadConfigV2(), unreadable: null };
   } catch (error) {
-    if (/No config/.test(error.message)) return null;
-    throw error;
+    if (/No config/.test(error.message)) return { previous: null, unreadable: null };
+    if (!options.force) throw error;
+    if (/must not use plain HTTP/.test(error.message)) {
+      throw new Error(
+        "existing config has a plain-HTTP non-loopback upstream. "
+        + "Pass --server id=https://your-host (or a loopback http URL), or fix config.json. "
+        + "Insecure upstreams are not enabled automatically.",
+      );
+    }
+    return { previous: null, unreadable: error };
   }
 }
 
@@ -43,10 +52,17 @@ async function main() {
     usage();
     return;
   }
-  const previous = await previousConfig();
+  const { previous, unreadable } = await previousConfig(options);
   if (previous && !options.force) {
     throw new Error("config already exists; back it up and pass --force to reconfigure");
   }
+  const backup = options.force ? await backupV2Setup() : null;
+  if (unreadable) {
+    const reason = unreadable.name === "SyntaxError" ? "invalid JSON" : unreadable.message;
+    console.warn(`setup: existing config could not be read (${reason}).`);
+    console.warn("setup: VAPID and pairing keys will be regenerated if they cannot be recovered.");
+  }
+  if (backup) console.log(`Backup: ${backup}`);
   const vapid = previous?.vapid ?? {
     ...webpush.generateVAPIDKeys(),
     subject: "mailto:pocket-approve@localhost",
@@ -54,6 +70,7 @@ async function main() {
   const pairingSecret = previous?.pairingSecret ?? newPairingSecret();
   const config = buildSetupConfig({ options, previous, env: process.env, vapid, pairingSecret });
   await mkdir(DATA_DIR, { recursive: true, mode: 0o700 });
+  if (unreadable) await rm(join(DATA_DIR, "config.json"), { force: true });
 
   if (config.mode === "lan") {
     await run(process.execPath, [

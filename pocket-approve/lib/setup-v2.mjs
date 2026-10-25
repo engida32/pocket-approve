@@ -1,5 +1,5 @@
 import { createHash, randomBytes } from "node:crypto";
-import { chmod, mkdir, writeFile } from "node:fs/promises";
+import { chmod, copyFile, mkdir, stat, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { DATA_DIR } from "./config.mjs";
 import { normalizeConfig, saveConfigV2, SCHEMA_VERSION } from "./config-v2.mjs";
@@ -109,7 +109,7 @@ export function buildSetupConfig({ options, previous = null, env = process.env, 
       ...base,
       host: "127.0.0.1",
       httpPort: options.httpPort ?? previous?.httpPort ?? 8080,
-      publicOrigin: options.publicOrigin ?? previous?.publicOrigin,
+      publicOrigin: options.publicOrigin ?? (previous?.mode === "proxy" ? previous.publicOrigin : null),
       allowLegacyToken: false,
       token: null,
     });
@@ -141,6 +141,29 @@ export function buildMeta({ vapid, now = () => new Date() } = {}) {
     createdAt: now().toISOString(),
     vapidFingerprint: vapidPairFingerprint(vapid),
   };
+}
+
+export async function backupV2Setup(dataDir = DATA_DIR, now = () => new Date()) {
+  const present = [];
+  for (const name of ["config.json", "meta.json"]) {
+    try {
+      await stat(join(dataDir, name));
+      present.push(name);
+    } catch (error) {
+      if (error.code !== "ENOENT") throw error;
+    }
+  }
+  if (present.length === 0) return null;
+  const stamp = now().toISOString().replace(/[:.]/g, "-");
+  const backupDir = join(dataDir, `backup-${stamp}`);
+  await mkdir(backupDir, { recursive: true, mode: 0o700 });
+  await chmod(backupDir, 0o700);
+  for (const name of present) {
+    const target = join(backupDir, name);
+    await copyFile(join(dataDir, name), target);
+    await chmod(target, 0o600);
+  }
+  return backupDir;
 }
 
 export async function writeV2Setup(config, meta, dataDir = DATA_DIR) {
