@@ -11,6 +11,7 @@
     "start": "node server.mjs",
     "setup": "node scripts/setup-v2.mjs",
     "test": "node --test test/*.test.mjs",
+    "icons": "node scripts/make-icons.mjs",
     "pair": "node scripts/admin.mjs pair",
     "devices": "node scripts/admin.mjs devices",
     "revoke": "node scripts/admin.mjs revoke",

@@ -1,18 +1,16 @@
 {
+  "id": "/",
   "name": "Pocket Approve",
   "short_name": "Approve",
-  "description": "Answer OpenCode permission requests from your phone.",
+  "description": "Approve OpenCode permission requests from your phone.",
   "start_url": "/",
   "scope": "/",
   "display": "standalone",
-  "background_color": "#f5f5f2",
   "theme_color": "#111111",
+  "background_color": "#f5f5f2",
   "icons": [
-    {
-      "src": "/icon.svg",
-      "sizes": "any",
-      "type": "image/svg+xml",
-      "purpose": "any"
-    }
+    { "src": "/icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any" },
+    { "src": "/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any" },
+    { "src": "/icon-maskable-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" }
   ]
 }
