@@ -248,7 +248,7 @@ export async function start({ config = null, dataDir = DATA_DIR, log = console }
     await runtime.start();
 
     if (loaded.mode === "proxy") {
-      server = createHttpServer(toNodeHandler(runtime.app.handler));
+      server = createHttpServer(toNodeHandler(runtime.app.handler, { log }));
       const address = await listen(server, loaded.httpPort, loaded.host);
       return {
         config: loaded,
@@ -262,8 +262,8 @@ export async function start({ config = null, dataDir = DATA_DIR, log = console }
     }
 
     const tls = await readTls(dataDir);
-    server = createHttpsServer(tls, toNodeHandler(runtime.app.handler));
-    setupServer = createHttpServer(toNodeHandler(createLanSetupHandler({ dataDir, log })));
+    server = createHttpsServer(tls, toNodeHandler(runtime.app.handler, { log }));
+    setupServer = createHttpServer(toNodeHandler(createLanSetupHandler({ dataDir, log }), { log }));
     const address = await listen(server, loaded.httpsPort, loaded.host);
     const setupAddress = await listen(setupServer, loaded.setupPort, loaded.host);
     return {

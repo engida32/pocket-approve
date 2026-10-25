@@ -33,7 +33,13 @@ function hasBody(method, status) {
   return true;
 }
 
-export function toNodeHandler(fetchHandler) {
+function logFailure(log) {
+  try {
+    log?.error?.("node-http: request failed");
+  } catch {}
+}
+
+export function toNodeHandler(fetchHandler, { log = null } = {}) {
   if (typeof fetchHandler !== "function") throw new TypeError("fetchHandler is required");
   return async function nodeHandler(req, res) {
     try {
@@ -79,6 +85,7 @@ export function toNodeHandler(fetchHandler) {
       }
       res.end(Buffer.from(await response.arrayBuffer()));
     } catch {
+      logFailure(log);
       if (res.writableEnded) return;
       if (res.headersSent) {
         res.destroy();

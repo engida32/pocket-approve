@@ -40,6 +40,25 @@ test("the node bridge rejects a request body over 64 KiB with 413", async (t) =>
   assert.deepEqual(await response.json(), { error: "body_too_large" });
 });
 
+test("the node bridge rejects a chunked body over 64 KiB with 413", async (t) => {
+  const { server, port } = await listen(toNodeHandler(async () => new Response("ok")));
+  t.after(() => new Promise((resolve) => server.close(resolve)));
+  const payload = new TextEncoder().encode("x".repeat(64 * 1024 + 1));
+  const body = new ReadableStream({
+    start(controller) {
+      controller.enqueue(payload);
+      controller.close();
+    },
+  });
+  const response = await fetch(`http://127.0.0.1:${port}/upload`, {
+    method: "POST",
+    body,
+    duplex: "half",
+  });
+  assert.equal(response.status, 413);
+  assert.deepEqual(await response.json(), { error: "body_too_large" });
+});
+
 test("the node bridge suppresses bodies for 204 and 304 responses", async (t) => {
   const { server, port } = await listen(toNodeHandler(async (request) => {
     const url = new URL(request.url);
@@ -77,4 +96,24 @@ test("the node bridge does not leak internal error details", async (t) => {
   const text = await response.text();
   assert.deepEqual(JSON.parse(text), { error: "internal_error" });
   assert.doesNotMatch(text, /shadow|secret/i);
+});
+
+test("the node bridge logs one fixed message without leaking error details", async (t) => {
+  const calls = [];
+  const log = {
+    error(...args) {
+      calls.push(args);
+    },
+  };
+  const { server, port } = await listen(toNodeHandler(async () => {
+    throw new Error("secret path /etc/shadow");
+  }, { log }));
+  t.after(() => new Promise((resolve) => server.close(resolve)));
+  const response = await fetch(`http://127.0.0.1:${port}/boom`);
+  assert.equal(response.status, 500);
+  const text = await response.text();
+  assert.deepEqual(JSON.parse(text), { error: "internal_error" });
+  assert.equal(calls.length, 1);
+  assert.deepEqual(calls[0], ["node-http: request failed"]);
+  assert.doesNotMatch(JSON.stringify(calls), /shadow|secret/i);
 });
