@@ -74,7 +74,7 @@ export function createAdmin({
 
   async function start() {
     if (server) return;
-    server = createServer((socket) => {
+    const created = createServer((socket) => {
       let data = "";
       socket.setEncoding("utf8");
       socket.on("data", (chunk) => {
@@ -102,14 +102,20 @@ export function createAdmin({
           });
       });
     });
-    await new Promise((resolve, reject) => {
-      server.once("error", reject);
-      server.listen(socketPath, () => {
-        server.off("error", reject);
-        resolve();
+    try {
+      await new Promise((resolve, reject) => {
+        created.once("error", reject);
+        created.listen(socketPath, () => {
+          created.off("error", reject);
+          resolve();
+        });
       });
-    });
-    await chmod(socketPath, 0o600);
+      await chmod(socketPath, 0o600);
+    } catch (error) {
+      await new Promise((resolve) => created.close(() => resolve()));
+      throw error;
+    }
+    server = created;
   }
 
   async function stop() {

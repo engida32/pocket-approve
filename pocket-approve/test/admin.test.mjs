@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { mkdtemp, rm, stat } from "node:fs/promises";
+import { mkdtemp, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { connect } from "node:net";
@@ -83,10 +83,40 @@ test("revoke removes device subscriptions and doctor never prints secrets", asyn
   t.after(() => admin.stop());
   const revoke = await send(join(dir, "admin.sock"), { command: "revoke", id: "dev_1" });
   assert.equal(revoke.ok, true);
+  assert.deepEqual(revoked, ["dev_1"]);
   assert.deepEqual(removed, ["dev_1"]);
   const doctor = await send(join(dir, "admin.sock"), { command: "doctor" });
   assert.equal(doctor.ok, true);
   assert.equal(JSON.stringify(doctor).includes("super-secret"), false);
   assert.equal(JSON.stringify(doctor).includes("pairing-secret"), false);
   assert.equal(doctor.checks.some((check) => check.name === "servers" && check.ok), true);
+});
+
+test("start retries after a failed listen and stop stays safe", async (t) => {
+  const dir = await temp(t);
+  const socketPath = join(dir, "admin.sock");
+  await writeFile(socketPath, "not a socket");
+  const admin = createAdmin({
+    socketPath,
+    config: {
+      mode: "proxy",
+      publicOrigin: "https://approve.example.com",
+      servers: [{ id: "local", label: "Laptop", url: "http://127.0.0.1:4096" }],
+      vapid: { publicKey: "pub" },
+      pairingSecret: "12345678901234567890",
+    },
+    devices: { list: () => [], activeCount: () => 0 },
+    pairing: { open: async () => ({ code: "ABCD-EFGH", expiresAt: "x" }) },
+    push: { removeByDevice: async () => 0 },
+    fleet: { servers: () => [{ id: "local", label: "Laptop", ok: true }] },
+    audit: { append: async () => {} },
+  });
+  t.after(() => admin.stop());
+  await assert.rejects(() => admin.start(), { code: "EADDRINUSE" });
+  await admin.stop();
+  await rm(socketPath, { force: true });
+  await admin.start();
+  const devices = await send(socketPath, { command: "devices" });
+  assert.equal(devices.ok, true);
+  assert.deepEqual(devices.devices, []);
 });
