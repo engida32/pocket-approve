@@ -1,4 +1,5 @@
 const MAX_SUMMARY = 140;
+const MAX_TITLE = 64;
 const ELLIPSIS = "...";
 const NO_DETAILS = "(no details)";
 
@@ -53,5 +54,6 @@ export function titleFor(request = {}) {
     ? request.patterns
     : [request?.patterns];
   const first = firstText(...patterns);
-  return first ? `${tool}: ${first}` : tool;
+  const title = first ? `${tool}: ${first}` : tool;
+  return title.length > MAX_TITLE ? title.slice(0, MAX_TITLE - 3) + "..." : title;
 }

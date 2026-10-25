@@ -120,3 +120,37 @@ test("adapter tolerates missing patterns and metadata", async () => {
     },
   ]);
 });
+
+test("adapter preserves always and tool when OpenCode sends them", async () => {
+  const { createOpenCodeSource } = await import("../lib/adapters/opencode.mjs");
+  const source = createOpenCodeSource({
+    list: async () => [{
+      id: "per_4",
+      sessionID: "ses_4",
+      permission: "bash",
+      patterns: ["git status"],
+      always: ["git status"],
+      tool: "bash",
+      metadata: {},
+    }],
+    reply: async () => true,
+  });
+  const [request] = await source.list();
+  assert.deepEqual(request.always, ["git status"]);
+  assert.equal(request.tool, "bash");
+});
+
+test("client aborts a slow upstream request", async (t) => {
+  const server = http.createServer((_req, res) => setTimeout(() => json(res, []), 200));
+  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+  t.after(() => server.close());
+  const { createClient } = await import("../lib/opencode.mjs");
+  const client = createClient({
+    baseUrl: `http://127.0.0.1:${server.address().port}`,
+    timeoutMs: 20,
+  });
+  await assert.rejects(client.list(), (error) => {
+    assert.equal(error.code, "UPSTREAM_TIMEOUT");
+    return true;
+  });
+});

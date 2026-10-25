@@ -1,39 +1,51 @@
 const USERNAME = "opencode";
 
-export function createClient({ baseUrl, password = null } = {}) {
-  const auth = password
-    ? {
-        authorization: `Basic ${Buffer.from(`${USERNAME}:${password}`).toString("base64")}`,
-      }
-    : {};
-
-  async function call(path, init = {}) {
-    const url = new URL(path, baseUrl);
-    const response = await fetch(url, {
-      ...init,
-      headers: { ...auth, ...init.headers },
-    });
-    if (!response.ok) {
-      const error = new Error(
-        `OpenCode ${init.method ?? "GET"} ${url.pathname} failed: ${response.status} ${response.statusText}`.trim(),
-      );
-      error.status = response.status;
-      throw error;
+export function createClient({
+  baseUrl,
+  username = USERNAME,
+  password = null,
+  timeoutMs = 5000,
+  fetchImpl = fetch,
+} = {}) {
+  if (!baseUrl) throw new TypeError("baseUrl is required");
+  async function call(path, options = {}) {
+    const headers = { ...(options.headers ?? {}) };
+    if (password) {
+      headers.authorization = "Basic " + Buffer.from(`${username}:${password}`).toString("base64");
     }
-    if (response.status === 204) return null;
-    return response.json();
-  }
-
-  return {
-    list() {
-      return call("/permission");
-    },
-    reply(id, decision) {
-      return call(`/permission/${encodeURIComponent(id)}/reply`, {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ reply: decision }),
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), timeoutMs);
+    try {
+      const response = await fetchImpl(new URL(path, baseUrl), {
+        ...options,
+        headers,
+        redirect: "error",
+        signal: controller.signal,
       });
-    },
+      if (!response.ok) {
+        const error = new Error(`OpenCode returned ${response.status}`);
+        error.status = response.status;
+        throw error;
+      }
+      if (response.status === 204) return null;
+      return await response.json();
+    } catch (error) {
+      if (error.name === "AbortError") {
+        const timeout = new Error(`OpenCode timed out after ${timeoutMs} ms`);
+        timeout.code = "UPSTREAM_TIMEOUT";
+        throw timeout;
+      }
+      throw error;
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+  return {
+    list: () => call("/permission"),
+    reply: (id, decision) => call(`/permission/${encodeURIComponent(id)}/reply`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ reply: decision }),
+    }),
   };
 }

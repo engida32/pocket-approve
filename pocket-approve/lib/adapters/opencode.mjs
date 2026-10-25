@@ -1,19 +1,16 @@
 import { summarize, titleFor } from "../summarize.mjs";
 
-function normalize(raw) {
-  const request = raw ?? {};
-  return {
-    id: request.id,
-    sessionID: request.sessionID,
-    permission: request.permission,
-    patterns: Array.isArray(request.patterns) ? request.patterns : [],
-    metadata:
-      request.metadata &&
-      typeof request.metadata === "object" &&
-      !Array.isArray(request.metadata)
-        ? request.metadata
-        : {},
+export function normalize(raw = {}) {
+  const request = {
+    id: raw.id,
+    sessionID: raw.sessionID,
+    permission: raw.permission,
+    patterns: Array.isArray(raw.patterns) ? raw.patterns : [],
+    metadata: raw.metadata && typeof raw.metadata === "object" ? raw.metadata : {},
   };
+  if (Array.isArray(raw.always)) request.always = raw.always;
+  if (typeof raw.tool === "string") request.tool = raw.tool;
+  return request;
 }
 
 export function createOpenCodeSource(client) {
