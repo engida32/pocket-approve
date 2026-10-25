@@ -287,7 +287,7 @@ test("--force without --server can be recovered with the advertised flags", asyn
   assert.equal(written.servers[0].url, "http://127.0.0.1:4096");
 });
 
-test("the plain-HTTP remedy names LAN flags in LAN mode", async (t) => {
+test("the LAN remedy example is executable end to end", { timeout: 30_000 }, async (t) => {
   const dir = await mkdtemp(join(tmpdir(), "pa-setup-v2-legacy-"));
   t.after(() => rm(dir, { recursive: true, force: true }));
   const legacy = JSON.stringify({
@@ -297,12 +297,36 @@ test("the plain-HTTP remedy names LAN flags in LAN mode", async (t) => {
   });
   await writeFile(join(dir, "config.json"), legacy);
 
-  await assert.rejects(runSetup(dir, ["--force", "--host", "127.0.0.1"]), (error) => {
+  let failureStderr = "";
+  let remedy = null;
+  await assert.rejects(runSetup(dir, ["--force", "--host", "192.168.1.5"]), (error) => {
     assert.equal(error.code, 1);
-    assert.match(error.stderr, /--mode lan --host <lan-ip> --server local=http:\/\/127\.0\.0\.1:4096/);
-    assert.doesNotMatch(error.stderr, /--mode proxy/);
+    failureStderr = error.stderr;
+    assert.match(error.stderr, /plain-HTTP/);
     assert.doesNotMatch(error.stderr, /legacy-token/);
+    const match = /\(for example: (.+?)\)\./.exec(error.stderr);
+    assert.notEqual(match, null);
+    remedy = match[1].split(" ");
     return true;
   });
+  assert.deepEqual(remedy, [
+    "--force",
+    "--mode", "lan",
+    "--host", "192.168.1.5",
+    "--server", "local=http://127.0.0.1:4096",
+  ]);
+  assert.doesNotMatch(remedy.join(" "), /</);
   assert.equal(await readFile(join(dir, "config.json"), "utf8"), legacy);
+  const backups = (await readdir(dir)).filter((name) => name.startsWith("backup-"));
+  assert.equal(backups.length, 0);
+
+  await rm(join(dir, "config.json"));
+  const { stderr } = await runSetup(dir, remedy);
+  assert.doesNotMatch(`${failureStderr}${stderr}`, /legacy-token/);
+  const written = JSON.parse(await readFile(join(dir, "config.json"), "utf8"));
+  assert.equal(written.mode, "lan");
+  assert.equal(written.host, "192.168.1.5");
+  assert.equal(written.servers.length, 1);
+  assert.equal(written.servers[0].url, "http://127.0.0.1:4096");
+  assert.equal(written.allowLegacyToken, false);
 });

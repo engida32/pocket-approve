@@ -78,8 +78,9 @@ async function previousConfig(options) {
       if (options.servers.length > 0) {
         return { previous: await lenientPrevious(), unreadable: null };
       }
+      const hostFlag = options.host ? `--host ${options.host} ` : "";
       const example = options.mode === "lan"
-        ? "--force --mode lan --host <lan-ip> --server local=http://127.0.0.1:4096"
+        ? `--force --mode lan ${hostFlag}--server local=http://127.0.0.1:4096`
         : "--force --mode proxy --public-origin https://approve.example.com "
           + "--server local=http://127.0.0.1:4096";
       throw new Error(
