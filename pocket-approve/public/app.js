@@ -78,6 +78,7 @@ function openDatabase() {
         db.createObjectStore(AUTH_STORE);
       }
     };
+    request.onblocked = () => reject(new Error("IndexedDB blocked"));
     request.onsuccess = () => resolve(request.result);
     request.onerror = () => reject(request.error);
   });
@@ -134,8 +135,8 @@ async function storeToken(token) {
 async function resolveToken() {
   const fromHash = tokenFromHash();
   if (fromHash) {
-    await storeToken(fromHash);
     clearHash();
+    await storeToken(fromHash);
     return fromHash;
   }
   let local = "";
@@ -465,9 +466,9 @@ function wireEvents() {
   window.addEventListener("hashchange", () => {
     const token = tokenFromHash();
     if (!token) return;
+    clearHash();
     void (async () => {
       await storeToken(token);
-      clearHash();
       state.token = token;
       state.unauthorized = false;
       state.connected = false;
