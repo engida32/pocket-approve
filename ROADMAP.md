@@ -4,23 +4,25 @@ Pocket Approve starts with OpenCode because that is what I use every day. The ap
 
 ## Status
 
-- **Now:** design and API verification.
-- **Next:** the OpenCode adapter and the first working build.
+- **Now:** v1 implemented. The automated suite passes 66 of 66 tests. The live phone and desktop checklist is pending.
+- **Next:** finish the manual checklist, then v1.1.
 - **Later:** more agents.
 
 ## v1: OpenCode, desktop and Android
 
-- [ ] Sidecar polls `GET /permission` every 2 s.
-- [ ] Desktop notification with Allow once, Allow always, Deny.
-- [ ] Android Web Push with the same actions.
-- [ ] Approval page over HTTPS with a local CA.
-- [ ] Token auth and optional OpenCode server password.
-- [ ] One phone, one shared queue.
+- [x] Sidecar polls `GET /permission` every 2 s.
+- [x] Desktop notification with Allow once, Allow always, Deny.
+- [x] Android Web Push with the same actions.
+- [x] Approval page over HTTPS with a local CA.
+- [x] Token auth and optional OpenCode server password.
+- [x] One phone, one shared queue.
 - [ ] Test plan from REPORT.md passes.
+
+The first six items are implemented; the automated suite covers the units. The last one includes the live phone and desktop checks and is pending. The desktop path uses `gdbus`, not `notify-send`, because `notify-send` 0.8.8 drops action buttons here. Chromium shows at most two notification actions, so Allow once and Deny appear there and the page always shows all three. Full cross-client dismissal is v1.1; v1 closes desktop notifications and drops answered requests from an open phone page. `Allow always` is at least project or server-process scoped; the saved-permission endpoint returned no entry, so the exact scope is unproven.
 
 ## v1.1: Less friction
 
-- [ ] Close the desktop notification when the phone answers, and the reverse.
+- [ ] Close the phone notification when the desktop answers. v1 already closes the desktop notification and drops answered requests from an open phone page.
 - [ ] Multiple phones. Show who answered.
 - [ ] Per-session mute and an "open terminal" action.
 - [ ] Subscribe to the event stream instead of polling.
@@ -37,7 +39,7 @@ Pocket Approve starts with OpenCode because that is what I use every day. The ap
 
 | Tool | How it plugs in | Status |
 |---|---|---|
-| OpenCode | HTTP permission API | v1 |
+| OpenCode | HTTP permission API | v1 implemented |
 | Generic CLI | `pocket-approve ask` | v2 |
 | Claude Code | Hooks, to be verified | Exploring |
 | Codex CLI | Hook or PTY wrapper, to be investigated | Exploring |
