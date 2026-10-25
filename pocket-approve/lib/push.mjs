@@ -10,6 +10,45 @@ function isObject(value) {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
+function isTimestamp(value) {
+  return typeof value === "string" && !Number.isNaN(Date.parse(value));
+}
+
+function normalizeTracking(entry, fallbackCreatedAt) {
+  const createdAt =
+    entry.createdAt === undefined || entry.createdAt === null
+      ? fallbackCreatedAt
+      : entry.createdAt;
+  if (!isTimestamp(createdAt)) {
+    throw new TypeError("subscription.createdAt must be a valid timestamp");
+  }
+
+  const lastSuccessAt = entry.lastSuccessAt ?? null;
+  if (lastSuccessAt !== null && !isTimestamp(lastSuccessAt)) {
+    throw new TypeError(
+      "subscription.lastSuccessAt must be a valid timestamp or null",
+    );
+  }
+
+  const lastFailureAt = entry.lastFailureAt ?? null;
+  if (lastFailureAt !== null && !isTimestamp(lastFailureAt)) {
+    throw new TypeError(
+      "subscription.lastFailureAt must be a valid timestamp or null",
+    );
+  }
+
+  const failures = entry.failures === undefined ? 0 : entry.failures;
+  if (!Number.isInteger(failures) || failures < 0) {
+    throw new TypeError("subscription.failures must be a non-negative integer");
+  }
+
+  return { createdAt, lastSuccessAt, lastFailureAt, failures };
+}
+
+function freshTracking(at = new Date().toISOString()) {
+  return { createdAt: at, lastSuccessAt: null, lastFailureAt: null, failures: 0 };
+}
+
 function assertDeviceId(deviceId) {
   if (typeof deviceId !== "string" || !DEVICE_ID_PATTERN.test(deviceId)) {
     throw new TypeError("deviceId must be a device id");
@@ -98,6 +137,25 @@ function mergeSubscription(existing, incoming) {
   return merged;
 }
 
+function earliestTimestamp(a, b) {
+  return Date.parse(a) <= Date.parse(b) ? a : b;
+}
+
+function latestTimestamp(a, b) {
+  if (a === null) return b;
+  if (b === null) return a;
+  return Date.parse(a) >= Date.parse(b) ? a : b;
+}
+
+function mergeLoadedSubscription(existing, incoming) {
+  const merged = mergeSubscription(existing, incoming);
+  merged.createdAt = earliestTimestamp(existing.createdAt, incoming.createdAt);
+  merged.lastSuccessAt = latestTimestamp(existing.lastSuccessAt, incoming.lastSuccessAt);
+  merged.lastFailureAt = latestTimestamp(existing.lastFailureAt, incoming.lastFailureAt);
+  merged.failures = Math.max(existing.failures, incoming.failures);
+  return merged;
+}
+
 export function createPush({
   dataDir,
   vapid,
@@ -150,6 +208,14 @@ export function createPush({
     return value === undefined ? undefined : structuredClone(value);
   }
 
+  async function persistDeliveryState() {
+    try {
+      await persist();
+    } catch (error) {
+      logError("push: failed to persist subscriptions after send", error);
+    }
+  }
+
   async function persist() {
     const snapshot = JSON.stringify(subscriptions, null, 2) + "\n";
     const write = writeChain.then(async () => {
@@ -195,6 +261,7 @@ export function createPush({
       throw new Error(`Invalid subscriptions in ${storePath}: expected an array`);
     }
 
+    const loadedAt = new Date().toISOString();
     const loaded = new Map();
     for (const [index, entry] of parsed.entries()) {
       let subscription;
@@ -202,6 +269,7 @@ export function createPush({
         const owner =
           isObject(entry) && entry.deviceId !== undefined ? entry.deviceId : null;
         subscription = normalizeSubscription(entry, owner);
+        Object.assign(subscription, normalizeTracking(entry, loadedAt));
       } catch (error) {
         throw new Error(
           `Invalid subscription at ${storePath}[${index}]: ${error.message}`,
@@ -210,7 +278,7 @@ export function createPush({
       const existing = loaded.get(subscription.endpoint);
       loaded.set(
         subscription.endpoint,
-        existing ? mergeSubscription(existing, subscription) : subscription,
+        existing ? mergeLoadedSubscription(existing, subscription) : subscription,
       );
     }
     subscriptions = [];
@@ -255,9 +323,15 @@ export function createPush({
     const index = subscriptions.findIndex(
       (stored) => stored.endpoint === normalized.endpoint,
     );
-    let stored = normalized;
-    if (index !== -1) {
-      stored = mergeSubscription(subscriptions[index], normalized);
+    let stored;
+    if (index === -1) {
+      stored = { ...normalized, ...freshTracking() };
+    } else {
+      const existing = subscriptions[index];
+      stored = {
+        ...mergeSubscription(existing, normalized),
+        ...normalizeTracking(existing, new Date().toISOString()),
+      };
     }
     validateSubscription(stored);
     if (index === -1) {
@@ -335,7 +409,7 @@ export function createPush({
       }
     }
 
-    if (changed) await persist();
+    if (changed) await persistDeliveryState();
     return result;
   }
 

@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import webpush from "web-push";
@@ -322,4 +322,111 @@ test("a push 403 is kept and counted as a failure", async (t) => {
   await push.add(subscription("https://push.example.com/a"), "dev_a");
   assert.deepEqual(await push.send({}, { deviceId: "dev_a" }), { sent: 0, failed: 1, removed: 0 });
   assert.equal(push.list().length, 1);
+});
+
+test("add initializes tracking fields and ignores client-supplied ones", async (t) => {
+  const dir = await tempDir(t);
+  const push = createPush({ dataDir: dir, vapid: vapid(), sendFn: async () => {} });
+  await push.init();
+  await push.add(
+    {
+      ...subscription("https://push/1"),
+      createdAt: "1999-01-01T00:00:00.000Z",
+      lastSuccessAt: "1999-01-01T00:00:00.000Z",
+      lastFailureAt: "1999-01-01T00:00:00.000Z",
+      failures: 42,
+    },
+    "dev_1a2b3c4d",
+  );
+
+  const stored = push.listForDevice("dev_1a2b3c4d")[0];
+  assert.equal(typeof stored.createdAt, "string");
+  assert.notEqual(stored.createdAt, "1999-01-01T00:00:00.000Z");
+  assert.equal(stored.lastSuccessAt, null);
+  assert.equal(stored.lastFailureAt, null);
+  assert.equal(stored.failures, 0);
+});
+
+test("failure counters survive a reload and an unrelated add", async (t) => {
+  const dir = await tempDir(t);
+  const { log } = quietLog();
+  const push = createPush({
+    dataDir: dir,
+    vapid: vapid(),
+    log,
+    sendFn: async () => {
+      const error = new Error("server error");
+      error.statusCode = 500;
+      throw error;
+    },
+  });
+  await push.init();
+  await push.add(subscription("https://push/1"), "dev_1a2b3c4d");
+  assert.deepEqual(await push.send({}, { deviceId: "dev_1a2b3c4d" }), {
+    sent: 0,
+    failed: 1,
+    removed: 0,
+  });
+  const first = push.listForDevice("dev_1a2b3c4d")[0];
+  assert.equal(first.failures, 1);
+  assert.equal(typeof first.lastFailureAt, "string");
+
+  const reopened = createPush({ dataDir: dir, vapid: vapid(), sendFn: async () => {} });
+  await reopened.init();
+  const reloaded = reopened.listForDevice("dev_1a2b3c4d")[0];
+  assert.equal(reloaded.failures, 1);
+  assert.equal(reloaded.lastFailureAt, first.lastFailureAt);
+  assert.equal(reloaded.createdAt, first.createdAt);
+  assert.equal(reloaded.lastSuccessAt, null);
+
+  await reopened.add(subscription("https://push/2"), "dev_2b3c4d5e");
+
+  const onDisk = JSON.parse(
+    await readFile(join(dir, "subscriptions.json"), "utf8"),
+  ).find((entry) => entry.endpoint === "https://push/1");
+  assert.equal(onDisk.failures, 1);
+  assert.equal(onDisk.lastFailureAt, first.lastFailureAt);
+  assert.equal(onDisk.createdAt, first.createdAt);
+  assert.equal(onDisk.lastSuccessAt, null);
+});
+
+test("init rejects invalid tracking fields", async (t) => {
+  for (const [tracking, pattern] of [
+    [{ failures: -1 }, /failures/],
+    [{ failures: 1.5 }, /failures/],
+    [{ failures: "1" }, /failures/],
+    [{ createdAt: "not a timestamp" }, /createdAt/],
+    [{ lastSuccessAt: 42 }, /lastSuccessAt/],
+    [{ lastFailureAt: "not a timestamp" }, /lastFailureAt/],
+  ]) {
+    const dir = await tempDir(t);
+    await writeFile(
+      join(dir, "subscriptions.json"),
+      JSON.stringify([{ ...subscription("https://push/1"), ...tracking }]),
+      { mode: 0o600 },
+    );
+    const push = createPush({ dataDir: dir, vapid: vapid(), sendFn: async () => {} });
+    await assert.rejects(push.init(), pattern);
+  }
+});
+
+test("a bookkeeping failure after delivery does not reject send", async (t) => {
+  const dir = await tempDir(t);
+  const { errors, log } = quietLog();
+  const { calls, sendFn } = recorder();
+  const push = createPush({ dataDir: dir, vapid: vapid(), sendFn, log });
+  await push.init();
+  await push.add(subscription("https://push/1"), "dev_1a2b3c4d");
+
+  await rm(join(dir, "subscriptions.json"));
+  await mkdir(join(dir, "subscriptions.json"));
+
+  const result = await push.send({ id: "1" }, { deviceId: "dev_1a2b3c4d" });
+
+  assert.deepEqual(result, { sent: 1, failed: 0, removed: 0 });
+  assert.equal(calls.length, 1);
+  assert.ok(
+    errors.some(([message]) => /persist/i.test(String(message))),
+    "expected a persistence error to be logged",
+  );
 });
