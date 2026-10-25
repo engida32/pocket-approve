@@ -11,6 +11,7 @@ export function createState({ source, desktop = null } = {}) {
   }
 
   const pending = new Map();
+  const inFlight = new Set();
   const settled = new Set();
 
   function list() {
@@ -27,7 +28,7 @@ export function createState({ source, desktop = null } = {}) {
 
   function add(request) {
     if (!request || !validId(request.id)) return false;
-    if (settled.has(request.id)) return false;
+    if (settled.has(request.id) || inFlight.has(request.id)) return false;
     pending.set(request.id, request);
     return true;
   }
@@ -41,7 +42,7 @@ export function createState({ source, desktop = null } = {}) {
     if (Array.isArray(requests)) {
       for (const request of requests) {
         if (!request || !validId(request.id)) continue;
-        if (settled.has(request.id)) continue;
+        if (settled.has(request.id) || inFlight.has(request.id)) continue;
         next.set(request.id, request);
       }
     }
@@ -55,16 +56,26 @@ export function createState({ source, desktop = null } = {}) {
     if (!ALLOWED.has(decision)) {
       throw new TypeError("decision must be once, always, or reject");
     }
-    if (!settled.has(id) && !pending.has(id) && typeof source.list === "function") {
+    if (settled.has(id) || inFlight.has(id)) return null;
+    if (!pending.has(id) && typeof source.list === "function") {
       replace(await source.list());
     }
-    if (!pending.has(id) || settled.has(id)) return null;
+    if (!pending.has(id) || settled.has(id) || inFlight.has(id)) return null;
 
     const request = pending.get(id);
     pending.delete(id);
-    settled.add(id);
+    inFlight.add(id);
 
-    await source.reply(id, decision);
+    try {
+      await source.reply(id, decision);
+    } catch (error) {
+      inFlight.delete(id);
+      pending.set(id, request);
+      throw error;
+    }
+
+    inFlight.delete(id);
+    settled.add(id);
 
     if (desktop && typeof desktop.close === "function") {
       try {

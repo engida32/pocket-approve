@@ -227,7 +227,12 @@ export function createApp({ source, push, desktop, config = {} } = {}) {
       let answered;
       try {
         answered = await state.reply(id, decision);
-      } catch {
+      } catch (error) {
+        const upstream = Number(error?.status);
+        if (upstream === 404 || upstream === 409) {
+          sendJson(response, upstream, { error: "request is no longer pending" });
+          return;
+        }
         sendJson(response, 502, { error: "upstream failure" });
         return;
       }

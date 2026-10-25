@@ -1,11 +1,17 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { execFile } from "node:child_process";
 import http from "node:http";
+import https from "node:https";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { promisify } from "node:util";
 import { createApp } from "../lib/app.mjs";
 import { tokensEqual } from "../lib/auth.mjs";
+import { readTls } from "../lib/tls.mjs";
+
+const run = promisify(execFile);
 
 function fakeSource(requests = []) {
   const replies = [];
@@ -149,6 +155,9 @@ test("the first concurrent reply wins and the second gets 404", async () => {
       decision: "once",
     });
     await replyStarted;
+    const relisted = await fetch(base + "/api/pending", { headers: auth("good") });
+    assert.equal(relisted.status, 200);
+    assert.deepEqual(await relisted.json(), []);
     const second = await jsonPost(base, "good", "/api/reply", {
       id: "per_1",
       decision: "reject",
@@ -224,15 +233,20 @@ test("unknown ids and invalid decisions are rejected without replying", async ()
   }
 });
 
-test("a source failure is reported and the id stays answered", async () => {
+test("a source failure returns 502 and the phone can retry", async () => {
   const fakeSrc = fakeSource([{ id: "per_1", title: "T", summary: "S" }]);
-  fakeSrc.reply = async () => {
-    throw new Error("opencode down");
+  const originalReply = fakeSrc.reply;
+  let attempts = 0;
+  fakeSrc.reply = async (id, decision) => {
+    attempts += 1;
+    if (attempts === 1) throw new Error("opencode down");
+    return originalReply(id, decision);
   };
+  const desktop = fakeDesktop();
   const app = createApp({
     source: fakeSrc,
     push: fakePush(),
-    desktop: fakeDesktop(),
+    desktop,
     config: { token: "good" },
   });
   const { server, base } = await listen(app.handler);
@@ -243,11 +257,41 @@ test("a source failure is reported and the id stays answered", async () => {
       decision: "once",
     });
     assert.equal(first.status, 502);
+    assert.deepEqual(desktop.closed, []);
     const second = await jsonPost(base, "good", "/api/reply", {
       id: "per_1",
       decision: "once",
     });
-    assert.equal(second.status, 404);
+    assert.equal(second.status, 200);
+    assert.equal(attempts, 2);
+    assert.deepEqual(fakeSrc.replies, [["per_1", "once"]]);
+    assert.deepEqual(desktop.closed, ["per_1"]);
+  } finally {
+    await close(server);
+  }
+});
+
+test("an upstream 404 is surfaced as 404, not 502", async () => {
+  const fakeSrc = fakeSource([{ id: "per_1", title: "T", summary: "S" }]);
+  fakeSrc.reply = async () => {
+    const error = new Error("gone");
+    error.status = 404;
+    throw error;
+  };
+  const app = createApp({
+    source: fakeSrc,
+    push: fakePush(),
+    desktop: fakeDesktop(),
+    config: { token: "good" },
+  });
+  const { server, base } = await listen(app.handler);
+  try {
+    await fetch(base + "/api/pending", { headers: auth("good") });
+    const reply = await jsonPost(base, "good", "/api/reply", {
+      id: "per_1",
+      decision: "once",
+    });
+    assert.equal(reply.status, 404);
   } finally {
     await close(server);
   }
@@ -436,6 +480,59 @@ test("the setup server serves only the CA and a token-free page", async (t) => {
       const response = await fetch(base + path);
       assert.equal(response.status, 404, path);
     }
+  } finally {
+    await close(server);
+  }
+});
+
+
+function httpsGet(port, path, ca, headers = {}) {
+  return new Promise((resolve, reject) => {
+    const request = https.request(
+      { hostname: "127.0.0.1", port, path, method: "GET", ca, headers },
+      (response) => {
+        const chunks = [];
+        response.on("data", (chunk) => chunks.push(chunk));
+        response.on("end", () => {
+          resolve({
+            status: response.statusCode,
+            body: Buffer.concat(chunks).toString("utf8"),
+          });
+        });
+      },
+    );
+    request.on("error", reject);
+    request.end();
+  });
+}
+
+test("the HTTPS listener enforces the bearer token with a trusted CA", async (t) => {
+  const dir = await tempDir(t);
+  await run(
+    process.execPath,
+    ["scripts/setup.mjs", "--host", "127.0.0.1", "--no-qr"],
+    { env: { ...process.env, POCKET_APPROVE_DATA: dir } },
+  );
+  const tls = await readTls(dir);
+  const ca = await readFile(join(dir, "ca.crt"));
+  const app = createApp({
+    source: fakeSource(),
+    push: fakePush(),
+    desktop: fakeDesktop(),
+    config: { token: "good", dataDir: dir },
+  });
+  const server = https.createServer(tls, app.handler);
+  await new Promise((resolve, reject) => {
+    server.once("error", reject);
+    server.listen(0, "127.0.0.1", resolve);
+  });
+  try {
+    const port = server.address().port;
+    const denied = await httpsGet(port, "/api/pending", ca);
+    assert.equal(denied.status, 401);
+    const allowed = await httpsGet(port, "/api/pending", ca, auth("good"));
+    assert.equal(allowed.status, 200);
+    assert.deepEqual(JSON.parse(allowed.body), []);
   } finally {
     await close(server);
   }
