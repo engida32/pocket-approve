@@ -1,16 +1,67 @@
-import { chmod, mkdir, readFile, writeFile } from "node:fs/promises";
+import { chmod, mkdir, readFile, rename, writeFile } from "node:fs/promises";
+import { isIP } from "node:net";
 import { join, resolve } from "node:path";
-import { DATA_DIR, CONFIG_PATH } from "./config.mjs";
+import { DATA_DIR } from "./config.mjs";
 
-export const CONFIG_V2_PATH = CONFIG_PATH;
 export const SCHEMA_VERSION = 2;
 export const SERVER_ID = /^[a-z0-9][a-z0-9_-]{0,31}$/;
 const LOOPBACK = new Set(["127.0.0.1", "::1", "localhost"]);
+
+function resolveDataDir() {
+  return process.env.POCKET_APPROVE_DATA
+    ? resolve(process.env.POCKET_APPROVE_DATA)
+    : DATA_DIR;
+}
+
+function configPath(dataDir) {
+  return join(dataDir, "config.json");
+}
+
+export let CONFIG_V2_PATH = configPath(resolveDataDir());
+
+function activeDataDir() {
+  const dataDir = resolveDataDir();
+  CONFIG_V2_PATH = configPath(dataDir);
+  return dataDir;
+}
 
 export function isLoopbackHost(host) {
   if (typeof host !== "string") return false;
   const bare = host.startsWith("[") && host.endsWith("]") ? host.slice(1, -1) : host;
   return LOOPBACK.has(bare);
+}
+
+function validPort(value, name) {
+  if (!Number.isInteger(value) || value < 1 || value > 65_535) {
+    throw new Error(`config.${name} must be an integer from 1 to 65535`);
+  }
+  return value;
+}
+
+function validLanHost(value) {
+  if (typeof value !== "string" || value.length === 0) {
+    throw new Error("lan mode host must be a specific address");
+  }
+  let host = value;
+  if (host.startsWith("[") || host.endsWith("]")) {
+    if (!host.startsWith("[") || !host.endsWith("]")) {
+      throw new Error("lan mode host must not include a port");
+    }
+    host = host.slice(1, -1);
+    if (isIP(host) !== 6) throw new Error("lan mode host must be a valid IPv6 address");
+  } else if (isIP(host) === 0) {
+    if (host.includes(":")) throw new Error("lan mode host must not include a port");
+    if (/[\s/]/.test(host)) throw new Error("lan mode host must be a specific address");
+  }
+  const wildcard = host === "0.0.0.0"
+    || host === "::"
+    || (isIP(host) === 6 && new URL(`http://[${host}]`).hostname === "[::]");
+  if (wildcard) throw new Error("lan mode host must be a specific address");
+  return host;
+}
+
+function originHost(host) {
+  return isIP(host) === 6 ? `[${host}]` : host;
 }
 
 export function parseOrigin(value, { name = "url", allowHttp = false } = {}) {
@@ -38,7 +89,6 @@ export function normalizeServer(raw, index) {
   if (typeof raw.id !== "string" || !SERVER_ID.test(raw.id)) {
     throw new Error(`${at}.id must match ${SERVER_ID}`);
   }
-  if (raw.id.includes(":")) throw new Error(`${at}.id must not contain a colon`);
   const label = raw.label ?? raw.id;
   if (typeof label !== "string" || label.length < 1 || label.length > 32) {
     throw new Error(`${at}.label must be 1 to 32 characters`);
@@ -72,6 +122,14 @@ export function normalizeServer(raw, index) {
   if (passwordEnv !== null && (typeof passwordEnv !== "string" || !/^[A-Z_][A-Z0-9_]*$/.test(passwordEnv))) {
     throw new Error(`${at}.passwordEnv must be an environment variable name`);
   }
+  const directory = raw.directory ?? null;
+  if (directory !== null && typeof directory !== "string") {
+    throw new Error(`${at}.directory must be a string or null`);
+  }
+  const enabled = raw.enabled === undefined ? true : raw.enabled;
+  if (typeof enabled !== "boolean") {
+    throw new Error(`${at}.enabled must be a boolean`);
+  }
   return {
     id: raw.id,
     label,
@@ -79,8 +137,8 @@ export function normalizeServer(raw, index) {
     username,
     password,
     passwordEnv,
-    directory: raw.directory ?? null,
-    enabled: raw.enabled !== false,
+    directory,
+    enabled,
   };
 }
 
@@ -131,11 +189,16 @@ export function normalizeConfig(raw = {}) {
     throw new Error("config.pollIntervalMs must be an integer from 2000 to 10000");
   }
 
+  const trustProxy = raw.trustProxy === undefined ? true : raw.trustProxy;
+  if (typeof trustProxy !== "boolean") {
+    throw new Error("config.trustProxy must be a boolean");
+  }
+
   const base = {
     schemaVersion: SCHEMA_VERSION,
     mode,
     host: raw.host ?? "127.0.0.1",
-    trustProxy: raw.trustProxy !== false,
+    trustProxy,
     allowInsecureUpstream,
     pollIntervalMs,
     allowLegacyToken: mode === "lan" && (migratedFromLegacy || raw.allowLegacyToken === true),
@@ -149,36 +212,28 @@ export function normalizeConfig(raw = {}) {
     if (!isLoopbackHost(base.host)) throw new Error("proxy mode host must be loopback");
     if (!raw.publicOrigin) throw new Error("proxy mode requires publicOrigin");
     const publicOrigin = parseOrigin(raw.publicOrigin, { name: "publicOrigin" });
-    const httpPort = raw.httpPort ?? 8080;
-    if (!Number.isInteger(httpPort) || httpPort < 1 || httpPort > 65_535) {
-      throw new Error("config.httpPort must be an integer from 1 to 65535");
-    }
+    const httpPort = validPort(raw.httpPort ?? 8080, "httpPort");
     return { ...base, httpPort, publicOrigin, httpsPort: 8443, setupPort: 8081 };
   }
 
-  const host = base.host;
-  if (!host || host === "0.0.0.0" || host === "::" || host === "[::]") {
-    throw new Error("lan mode host must be a specific address");
-  }
+  const host = validLanHost(base.host);
+  const httpsPort = validPort(raw.httpsPort ?? 8443, "httpsPort");
+  const setupPort = validPort(raw.setupPort ?? 8081, "setupPort");
   return {
     ...base,
-    httpsPort: raw.httpsPort ?? 8443,
-    setupPort: raw.setupPort ?? 8081,
-    publicOrigin: `https://${host}:${raw.httpsPort ?? 8443}`,
+    host,
+    httpsPort,
+    setupPort,
+    publicOrigin: `https://${originHost(host)}:${httpsPort}`,
     httpPort: null,
   };
 }
 
-function resolveDataDir() {
-  return process.env.POCKET_APPROVE_DATA
-    ? resolve(process.env.POCKET_APPROVE_DATA)
-    : DATA_DIR;
-}
-
-export async function loadConfigV2(dataDir = resolveDataDir()) {
+export async function loadConfigV2(dataDir) {
+  const dir = dataDir ?? activeDataDir();
   let raw;
   try {
-    raw = JSON.parse(await readFile(join(dataDir, "config.json"), "utf8"));
+    raw = JSON.parse(await readFile(configPath(dir), "utf8"));
   } catch (error) {
     if (error.code === "ENOENT") throw new Error("No config. Run: npm run setup");
     throw error;
@@ -186,13 +241,14 @@ export async function loadConfigV2(dataDir = resolveDataDir()) {
   return normalizeConfig(raw);
 }
 
-export async function saveConfigV2(input, dataDir = resolveDataDir()) {
+export async function saveConfigV2(input, dataDir) {
   const config = normalizeConfig(input);
-  await mkdir(dataDir, { recursive: true, mode: 0o700 });
-  await chmod(dataDir, 0o700);
-  const temp = join(dataDir, `.config.${process.pid}.tmp`);
+  const dir = dataDir ?? activeDataDir();
+  await mkdir(dir, { recursive: true, mode: 0o700 });
+  await chmod(dir, 0o700);
+  const temp = join(dir, `.config.${process.pid}.tmp`);
   await writeFile(temp, JSON.stringify(config, null, 2) + "\n", { mode: 0o600 });
   await chmod(temp, 0o600);
-  await import("node:fs/promises").then(({ rename }) => rename(temp, join(dataDir, "config.json")));
+  await rename(temp, configPath(dir));
   return config;
 }

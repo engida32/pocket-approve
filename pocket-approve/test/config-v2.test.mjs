@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { mkdtemp, readFile, stat, writeFile } from "node:fs/promises";
+import { mkdtemp, readFile, rm, stat } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -147,4 +147,111 @@ test("an empty or disabled-only fleet fails startup", async () => {
     () => normalizeConfig({ ...base, servers: [{ id: "a", url: "http://127.0.0.1:1", enabled: false }] }),
     /at least one server/i,
   );
+});
+
+test("brackets IPv6 LAN hosts and keeps the bind host bare", async () => {
+  const { normalizeConfig } = await import("../lib/config-v2.mjs?" + Date.now());
+  const base = {
+    mode: "lan",
+    servers: [{ id: "a", url: "http://127.0.0.1:4096" }],
+  };
+  const bare = normalizeConfig({ ...base, host: "fd00::5" });
+  assert.equal(bare.host, "fd00::5");
+  assert.equal(bare.publicOrigin, "https://[fd00::5]:8443");
+
+  const bracketed = normalizeConfig({ ...base, host: "[fd00::5]", httpsPort: 9443 });
+  assert.equal(bracketed.host, "fd00::5");
+  assert.equal(bracketed.publicOrigin, "https://[fd00::5]:9443");
+
+  const local = normalizeConfig({ ...base, host: "::1" });
+  assert.equal(local.host, "::1");
+  assert.equal(local.publicOrigin, "https://[::1]:8443");
+});
+
+test("rejects a LAN host that already includes a port", async () => {
+  const { normalizeConfig } = await import("../lib/config-v2.mjs?" + Date.now());
+  const base = {
+    mode: "lan",
+    servers: [{ id: "a", url: "http://127.0.0.1:4096" }],
+  };
+  for (const host of ["192.168.1.5:8443", "example.com:8443", "[::1]:8443"]) {
+    assert.throws(() => normalizeConfig({ ...base, host }), /port/i, host);
+  }
+});
+
+test("validates LAN httpsPort and setupPort", async () => {
+  const { normalizeConfig } = await import("../lib/config-v2.mjs?" + Date.now());
+  const base = {
+    mode: "lan",
+    host: "192.168.1.5",
+    servers: [{ id: "a", url: "http://127.0.0.1:4096" }],
+  };
+  for (const key of ["httpsPort", "setupPort"]) {
+    for (const value of [0, 65_536, 1.5, "8443"]) {
+      assert.throws(
+        () => normalizeConfig({ ...base, [key]: value }),
+        new RegExp(key, "i"),
+        `${key}=${value}`,
+      );
+    }
+  }
+  const edges = normalizeConfig({ ...base, httpsPort: 1, setupPort: 65_535 });
+  assert.equal(edges.httpsPort, 1);
+  assert.equal(edges.setupPort, 65_535);
+});
+
+test("CONFIG_V2_PATH and load/save follow the data directory after the env changes", async () => {
+  const previous = process.env.POCKET_APPROVE_DATA;
+  const dirA = await tempData("pa-config-v2-a-");
+  const dirB = await tempData("pa-config-v2-b-");
+  try {
+    process.env.POCKET_APPROVE_DATA = dirA;
+    const module = await import("../lib/config-v2.mjs?" + Date.now());
+    assert.equal(module.CONFIG_V2_PATH, join(dirA, "config.json"));
+
+    process.env.POCKET_APPROVE_DATA = dirB;
+    const saved = await module.saveConfigV2({
+      host: "127.0.0.1",
+      publicOrigin: "https://approve.example.com",
+      servers: [{ id: "local", url: "http://127.0.0.1:4096" }],
+    });
+    assert.equal(module.CONFIG_V2_PATH, join(dirB, "config.json"));
+    assert.equal(saved.mode, "proxy");
+    assert.equal((await stat(join(dirB, "config.json"))).mode & 0o777, 0o600);
+    assert.equal((await module.loadConfigV2()).servers[0].id, "local");
+  } finally {
+    if (previous === undefined) delete process.env.POCKET_APPROVE_DATA;
+    else process.env.POCKET_APPROVE_DATA = previous;
+    await rm(dirA, { recursive: true, force: true });
+    await rm(dirB, { recursive: true, force: true });
+  }
+});
+
+test("rejects mistyped enabled, trustProxy, and directory fields", async () => {
+  const { normalizeConfig } = await import("../lib/config-v2.mjs?" + Date.now());
+  const base = {
+    host: "127.0.0.1",
+    publicOrigin: "https://approve.example.com",
+    servers: [{ id: "a", url: "http://127.0.0.1:1" }],
+  };
+  assert.throws(
+    () => normalizeConfig({ ...base, servers: [{ id: "a", url: "http://127.0.0.1:1", enabled: "yes" }] }),
+    /enabled/i,
+  );
+  assert.throws(
+    () => normalizeConfig({ ...base, servers: [{ id: "a", url: "http://127.0.0.1:1", enabled: 0 }] }),
+    /enabled/i,
+  );
+  assert.throws(() => normalizeConfig({ ...base, trustProxy: "true" }), /trustProxy/i);
+  assert.throws(
+    () => normalizeConfig({ ...base, servers: [{ id: "a", url: "http://127.0.0.1:1", directory: 7 }] }),
+    /directory/i,
+  );
+  const ok = normalizeConfig({
+    ...base,
+    trustProxy: false,
+    servers: [{ id: "a", url: "http://127.0.0.1:1", directory: "/work", enabled: true }],
+  });
+  assert.equal(ok.trustProxy, false);
+  assert.equal(ok.servers[0].directory, "/work");
 });
