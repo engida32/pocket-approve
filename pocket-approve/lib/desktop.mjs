@@ -3,11 +3,24 @@ import { createInterface } from "node:readline";
 
 const APP_NAME = "Pocket Approve";
 const REPLACES_ID = "0";
-const ICON = "dialog-question";
-const ACTIONS = "['once','Allow once','always','Allow always','reject','Deny']";
+const ICON = "";
+const ACTIONS = "['once', 'Allow once', 'reject', 'Deny', 'always', 'Allow always']";
 const HINTS = "{'urgency': <byte 2>}";
-const TIMEOUT = "-1";
+const TIMEOUT = "0";
 const DECISIONS = new Set(["once", "always", "reject"]);
+
+const MARKUP_ESCAPES = { "&": "&amp;", "<": "&lt;", ">": "&gt;" };
+const GVARIANT_ESCAPES = new Map([
+  ["\\", "\\\\"],
+  ['"', '\\"'],
+  ["\n", "\\n"],
+  ["\r", "\\r"],
+  ["\t", "\\t"],
+  ["\b", "\\b"],
+  ["\f", "\\f"],
+  ["\v", "\\v"],
+  ["\x07", "\\a"],
+]);
 
 const CALL = [
   "call",
@@ -20,6 +33,30 @@ const CALL = [
 
 const MONITOR = ["monitor", "--session", "--dest", "org.freedesktop.Notifications"];
 
+function escapeMarkup(value) {
+  return String(value ?? "").replace(/[&<>]/g, (char) => MARKUP_ESCAPES[char]);
+}
+
+export function gvariantString(value) {
+  let out = '"';
+  for (const char of String(value ?? "")) {
+    const escape = GVARIANT_ESCAPES.get(char);
+    if (escape) {
+      out += escape;
+      continue;
+    }
+    const code = char.codePointAt(0);
+    if (code === 0) {
+      out += "\uFFFD";
+    } else if (code < 0x20 || (code >= 0x7f && code <= 0x9f)) {
+      out += `\\u${code.toString(16).padStart(4, "0")}`;
+    } else {
+      out += char;
+    }
+  }
+  return `${out}"`;
+}
+
 export function buildNotifyArgs(request = {}) {
   return [
     ...CALL,
@@ -29,8 +66,8 @@ export function buildNotifyArgs(request = {}) {
     APP_NAME,
     REPLACES_ID,
     ICON,
-    request.title ?? "",
-    request.summary ?? "",
+    gvariantString(request.title ?? ""),
+    gvariantString(escapeMarkup(request.summary ?? "")),
     ACTIONS,
     HINTS,
     TIMEOUT,

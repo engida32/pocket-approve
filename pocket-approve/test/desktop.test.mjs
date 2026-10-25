@@ -7,6 +7,7 @@ import {
   buildCloseArgs,
   parseNotifyId,
   parseActionLine,
+  gvariantString,
   createDesktop,
 } from "../lib/desktop.mjs";
 
@@ -56,13 +57,38 @@ test("buildNotifyArgs carries the title, summary, urgency, icon and three action
     "--",
     "Pocket Approve",
     "0",
-    "dialog-question",
-    "Bash: touch x",
-    "touch x",
-    "['once','Allow once','always','Allow always','reject','Deny']",
+    "",
+    '"Bash: touch x"',
+    '"touch x"',
+    "['once', 'Allow once', 'reject', 'Deny', 'always', 'Allow always']",
     "{'urgency': <byte 2>}",
-    "-1",
+    "0",
   ]);
+});
+
+test("gvariantString quotes backslashes, quotes, and control characters", () => {
+  assert.equal(gvariantString(String.raw`C:\Users\me`), String.raw`"C:\\Users\\me"`);
+  assert.equal(gvariantString("a\\"), '"a\\\\"');
+  assert.equal(gvariantString('a\\"b'), String.raw`"a\\\"b"`);
+  assert.equal(gvariantString(String.raw`echo \d+`), String.raw`"echo \\d+"`);
+  assert.equal(gvariantString("It's fine"), `"It's fine"`);
+  assert.equal(gvariantString("line\nnext"), '"line\\nnext"');
+  assert.equal(gvariantString("tab\there"), '"tab\\there"');
+  assert.equal(gvariantString("bell\x07"), '"bell\\a"');
+  assert.equal(gvariantString("ctl\u0001x"), '"ctl\\u0001x"');
+  assert.equal(gvariantString("nul\u0000x"), '"nul\uFFFDx"');
+});
+
+test("buildNotifyArgs leaves the title raw but escapes body markup before quoting", () => {
+  const args = buildNotifyArgs({ title: "$HOME <b>x</b>", summary: "$HOME <b>x</b>" });
+  assert.equal(args.at(-5), '"$HOME <b>x</b>"');
+  assert.equal(args.at(-4), '"$HOME &lt;b&gt;x&lt;/b&gt;"');
+});
+
+test("buildNotifyArgs round-trips a Windows path through GVariant quoting", () => {
+  const args = buildNotifyArgs({ title: String.raw`C:\Users\me`, summary: "a\\b" });
+  assert.equal(args.at(-5), String.raw`"C:\\Users\\me"`);
+  assert.equal(args.at(-4), '"a\\\\b"');
 });
 
 test("buildCloseArgs closes the notification by id", () => {
