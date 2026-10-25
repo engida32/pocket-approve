@@ -78,11 +78,14 @@ async function previousConfig(options) {
       if (options.servers.length > 0) {
         return { previous: await lenientPrevious(), unreadable: null };
       }
+      const example = options.mode === "lan"
+        ? "--force --mode lan --host <lan-ip> --server local=http://127.0.0.1:4096"
+        : "--force --mode proxy --public-origin https://approve.example.com "
+          + "--server local=http://127.0.0.1:4096";
       throw new Error(
         "existing config has a plain-HTTP non-loopback upstream. "
-        + "Fix the upstream URL in config.json to https or loopback http, "
-        + "or delete config.json, then rerun with --force. "
-        + "Insecure upstreams are not enabled automatically.",
+        + "Either fix that URL to https or loopback http, or delete config.json "
+        + `and rerun with the full setup flags (for example: ${example}).`,
       );
     }
     return { previous: null, unreadable: error };

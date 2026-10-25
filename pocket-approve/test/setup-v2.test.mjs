@@ -246,7 +246,7 @@ test("--force with --server replaces a plain-HTTP non-loopback v1 upstream", asy
   assert.equal(written.pairingSecret, "pairing-secret-that-is-long-enough");
 });
 
-test("--force without --server fails with a working remedy", async (t) => {
+test("--force without --server can be recovered with the advertised flags", async (t) => {
   const dir = await mkdtemp(join(tmpdir(), "pa-setup-v2-legacy-"));
   t.after(() => rm(dir, { recursive: true, force: true }));
   const legacy = JSON.stringify({
@@ -256,24 +256,53 @@ test("--force without --server fails with a working remedy", async (t) => {
   });
   await writeFile(join(dir, "config.json"), legacy);
 
-  await assert.rejects(
-    runSetup(dir, [
-      "--mode", "proxy",
-      "--public-origin", "https://approve.example.com",
-      "--no-qr",
-      "--force",
-    ]),
-    (error) => {
-      assert.equal(error.code, 1);
-      assert.match(error.stderr, /plain-HTTP/);
-      assert.match(error.stderr, /delete config\.json/);
-      assert.match(error.stderr, /then rerun with --force/);
-      assert.doesNotMatch(error.stderr, /--server/);
-      assert.doesNotMatch(error.stderr, /legacy-token/);
-      return true;
-    },
-  );
+  let remedy = null;
+  await assert.rejects(runSetup(dir, ["--force"]), (error) => {
+    assert.equal(error.code, 1);
+    assert.match(error.stderr, /plain-HTTP/);
+    assert.match(error.stderr, /delete config\.json/);
+    assert.doesNotMatch(error.stderr, /legacy-token/);
+    const match = /\(for example: (.+?)\)\./.exec(error.stderr);
+    assert.notEqual(match, null);
+    remedy = match[1].split(" ");
+    return true;
+  });
+  assert.deepEqual(remedy, [
+    "--force",
+    "--mode", "proxy",
+    "--public-origin", "https://approve.example.com",
+    "--server", "local=http://127.0.0.1:4096",
+  ]);
   assert.equal(await readFile(join(dir, "config.json"), "utf8"), legacy);
   const backups = (await readdir(dir)).filter((name) => name.startsWith("backup-"));
   assert.equal(backups.length, 0);
+
+  await rm(join(dir, "config.json"));
+  await runSetup(dir, remedy);
+  const written = JSON.parse(await readFile(join(dir, "config.json"), "utf8"));
+  assert.equal(written.mode, "proxy");
+  assert.equal(written.publicOrigin, "https://approve.example.com");
+  assert.equal(written.servers.length, 1);
+  assert.equal(written.servers[0].id, "local");
+  assert.equal(written.servers[0].url, "http://127.0.0.1:4096");
+});
+
+test("the plain-HTTP remedy names LAN flags in LAN mode", async (t) => {
+  const dir = await mkdtemp(join(tmpdir(), "pa-setup-v2-legacy-"));
+  t.after(() => rm(dir, { recursive: true, force: true }));
+  const legacy = JSON.stringify({
+    host: "192.168.1.5",
+    token: "legacy-token",
+    opencodeUrl: "http://192.168.1.10:4096",
+  });
+  await writeFile(join(dir, "config.json"), legacy);
+
+  await assert.rejects(runSetup(dir, ["--force", "--host", "127.0.0.1"]), (error) => {
+    assert.equal(error.code, 1);
+    assert.match(error.stderr, /--mode lan --host <lan-ip> --server local=http:\/\/127\.0\.0\.1:4096/);
+    assert.doesNotMatch(error.stderr, /--mode proxy/);
+    assert.doesNotMatch(error.stderr, /legacy-token/);
+    return true;
+  });
+  assert.equal(await readFile(join(dir, "config.json"), "utf8"), legacy);
 });
