@@ -10,6 +10,7 @@ const json = (res, body, status = 200) => {
 };
 
 test("list and reply hit the live-shaped endpoints", async (t) => {
+  let posted = null;
   const server = http.createServer((req, res) => {
     if (req.method === "GET" && req.url === "/permission") {
       return json(res, [
@@ -21,7 +22,13 @@ test("list and reply hit the live-shaped endpoints", async (t) => {
         req.headers.authorization,
         "Basic " + Buffer.from("opencode:pw").toString("base64"),
       );
-      return json(res, true);
+      const chunks = [];
+      req.on("data", (chunk) => chunks.push(chunk));
+      req.on("end", () => {
+        posted = JSON.parse(Buffer.concat(chunks).toString("utf8"));
+        json(res, true);
+      });
+      return;
     }
     res.writeHead(404).end();
   });
@@ -34,6 +41,7 @@ test("list and reply hit the live-shaped endpoints", async (t) => {
   });
   assert.equal((await client.list())[0].id, "per_1");
   assert.equal(await client.reply("per_1", "once"), true);
+  assert.deepEqual(posted, { reply: "once" });
 });
 
 test("client sends no auth header without a password", async (t) => {
