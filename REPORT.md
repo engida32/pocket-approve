@@ -133,10 +133,10 @@ opencode attach "http://$LAN_IP:4096" -c
 cd pocket-approve
 npm install
 npm run setup     # creates the CA, server certificate, VAPID keys, and token
-node server.mjs
+npm start
 ```
 
-There is no `npm start` script yet. Run `node server.mjs` to start the notifier.
+`npm start` runs `node server.mjs`. Run `node server.mjs` directly if you prefer.
 
 The desktop notifier needs `gdbus` from GLib, which a GNOME desktop already has. It does not use `notify-send`; version 0.8.8 drops action buttons here. GNOME and KDE both ship a notification daemon that supports actions. Other desktops may need a different adapter.
 

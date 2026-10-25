@@ -8,6 +8,7 @@
     "node": ">=20"
   },
   "scripts": {
+    "start": "node server.mjs",
     "setup": "node scripts/setup.mjs",
     "test": "node --test test/*.test.mjs"
   },

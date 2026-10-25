@@ -50,6 +50,17 @@ OpenCode sessions have to run under `opencode serve`; terminals join with `openc
 - Laptop and phone on the same Wi-Fi. Push delivery also needs internet on both.
 - A one-time local CA install on the phone.
 
+## Run it
+
+```bash
+cd pocket-approve
+npm install
+npm run setup
+npm start
+```
+
+`npm start` runs `node server.mjs`. Run `node server.mjs` directly if you prefer.
+
 ## Roadmap
 
 - **v1:** implemented. OpenCode, GNOME desktop actions, Android Web Push, one phone, Allow once / Allow always / Deny.
