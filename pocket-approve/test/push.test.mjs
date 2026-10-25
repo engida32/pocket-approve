@@ -275,3 +275,51 @@ test("requires a VAPID subject when VAPID is configured", () => {
   });
   assert.equal(unconfigured.publicKey, null);
 });
+
+test("subscriptions are device-owned and filtered sends never cross devices", async (t) => {
+  const dir = await mkdtemp(join(tmpdir(), "pa-push-owner-"));
+  t.after(() => rm(dir, { recursive: true, force: true }));
+  const calls = [];
+  const push = createPush({
+    dataDir: dir,
+    vapid: { subject: "mailto:a@example.com", publicKey: "pub", privateKey: "priv" },
+    sendFn: async (subscription, body, options) => calls.push({ subscription, body, options }),
+  });
+  await push.init();
+  await push.add(subscription("https://push.example.com/a"), "dev_a");
+  await push.add(subscription("https://push.example.com/b"), "dev_b");
+  assert.equal(push.listForDevice("dev_a").length, 1);
+  assert.equal(push.listForDevice(null).length, 0);
+  const result = await push.send({ id: "a:1" }, {
+    deviceId: "dev_a",
+    options: { TTL: 600, urgency: "high", topic: "abc" },
+  });
+  assert.deepEqual(result, { sent: 1, failed: 0, removed: 0 });
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].subscription.endpoint, "https://push.example.com/a");
+  assert.deepEqual(calls[0].options, {
+    vapidDetails: { subject: "mailto:a@example.com", publicKey: "pub", privateKey: "priv" },
+    TTL: 600,
+    urgency: "high",
+    topic: "abc",
+  });
+  assert.equal(await push.removeByDevice("dev_a"), 1);
+  assert.equal(push.list().length, 1);
+});
+
+test("a push 403 is kept and counted as a failure", async (t) => {
+  const dir = await mkdtemp(join(tmpdir(), "pa-push-403-"));
+  t.after(() => rm(dir, { recursive: true, force: true }));
+  const push = createPush({
+    dataDir: dir,
+    vapid: { subject: "mailto:a@example.com", publicKey: "pub", privateKey: "priv" },
+    sendFn: async () => {
+      const error = new Error("forbidden");
+      error.statusCode = 403;
+      throw error;
+    },
+  });
+  await push.add(subscription("https://push.example.com/a"), "dev_a");
+  assert.deepEqual(await push.send({}, { deviceId: "dev_a" }), { sent: 0, failed: 1, removed: 0 });
+  assert.equal(push.list().length, 1);
+});
