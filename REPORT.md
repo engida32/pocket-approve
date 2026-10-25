@@ -149,7 +149,7 @@ Phone setup:
 
 Desktop setup:
 
-1. Run the notifier's test command. Confirm that the desktop notification shows the summary and all three actions. The notifier calls `gdbus` directly. Do not use `notify-send` as the test; version 0.8.8 drops the buttons here.
+1. Trigger a real permission request from an attached terminal, such as a bash command that needs approval. Confirm that the desktop notification shows the summary and all three actions. The setup page's Send test button covers the phone push only. The notifier calls `gdbus` directly. Do not use `notify-send` as the test; version 0.8.8 drops the buttons here.
 2. Answer from the desktop and confirm the terminal prompt closes.
 
 ## Repository layout
