@@ -5,6 +5,7 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createFleet } from "../lib/fleet.mjs";
+import { createAppV2 } from "../lib/app-v2.mjs";
 import { createAuthenticator } from "../lib/device-auth.mjs";
 import { createPairing } from "../lib/pairing.mjs";
 import { createDeviceStore } from "../lib/devices.mjs";
@@ -21,6 +22,10 @@ async function freePort() {
   const port = server.address().port;
   await new Promise((resolve) => server.close(resolve));
   return port;
+}
+
+function delay(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 test("two servers with the same raw id stay distinct and reply strictly", async (t) => {
@@ -111,19 +116,33 @@ test("pairing creates a device only after the code matches and revocation kills 
 });
 
 test("a restart does not resurrect an old poller or cache", async (t) => {
+  let gets = 0;
   const server = await fakeServer((req, res) => {
-    if (req.method === "GET") return end(res, [{
-      id: "per_3", sessionID: "ses_3", permission: "bash", patterns: ["pwd"], metadata: {},
-    }]);
+    if (req.method === "GET") {
+      gets += 1;
+      return end(res, [{
+        id: "per_3", sessionID: "ses_3", permission: "bash", patterns: ["pwd"], metadata: {},
+      }]);
+    }
     end(res, { ok: true });
   });
   t.after(() => server.server.close());
-  const config = { servers: [{ id: "one", label: "One", url: server.url, enabled: true }] };
+  const config = {
+    pollIntervalMs: 50,
+    servers: [{ id: "one", label: "One", url: server.url, enabled: true }],
+  };
   const first = createFleet({ config });
   await first.init({ quiet: true });
   await first.refreshAll();
   assert.equal(first.pending().requests.length, 1);
+  first.start();
+  const beforeStop = gets;
+  await delay(120);
+  assert.ok(gets > beforeStop, "the started fleet keeps polling");
   await first.stop();
+  const afterStop = gets;
+  await delay(120);
+  assert.equal(gets, afterStop, "a stopped fleet must not poll again");
   const second = createFleet({ config });
   await second.init({ quiet: true });
   assert.equal(second.pending().requests.length, 0);
@@ -146,6 +165,26 @@ test("the legacy token is accepted only for LAN migration, never by default", as
   const result = await legacy.authenticate({ headers: { authorization: `Bearer ${created.token}` } });
   assert.equal(result.device.id, created.device.id);
   assert.equal(result.legacy, undefined);
+  const app = createAppV2({
+    config: {
+      mode: "proxy",
+      allowLegacyToken: true,
+      token: "legacy-token",
+      publicOrigin: "https://approve.example.com",
+    },
+    devices: { findActive: async () => null },
+    fleet: {},
+    push: {},
+    pairing: {},
+    notifications: {},
+  });
+  const response = await app.handler(new Request("https://approve.example.com/api/pending", {
+    headers: {
+      authorization: "Bearer legacy-token",
+      origin: "https://approve.example.com",
+    },
+  }));
+  assert.equal(response.status, 401);
 });
 
 function end(res, value, status = 200) {
