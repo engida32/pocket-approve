@@ -198,19 +198,18 @@ self.addEventListener("message", (event) => {
 
 self.addEventListener("push", (event) => {
   event.waitUntil((async () => {
-    let payload;
+    let payload = {};
     try {
       payload = event.data?.json() ?? {};
     } catch {
-      return;
+      payload = {};
     }
     const kind = payload.kind === "request" ? "request" : payload.kind === "digest" ? "digest" : "test";
-    const body = String(payload.summary ?? "Open Pocket Approve to review.").slice(0, 180);
+    const body = String(payload.summary || "Open Pocket Approve to review.").slice(0, 180);
     const count = Number.isInteger(payload.count) ? payload.count : 1;
     const options = {
       body: kind === "digest" ? `${count} new permission requests` : body,
       icon: "/icon-192.png",
-      badge: "/icon-192.png",
       tag: payload.id ? String(payload.id) : undefined,
       data: {
         kind,
@@ -223,7 +222,7 @@ self.addEventListener("push", (event) => {
       silent: false,
     };
     if (kind === "request") options.actions = ACTIONS;
-    await self.registration.showNotification(String(payload.title ?? "Pocket Approve").slice(0, 64), options);
+    await self.registration.showNotification(String(payload.title || "Pocket Approve").slice(0, 64), options);
   })());
 });
 
