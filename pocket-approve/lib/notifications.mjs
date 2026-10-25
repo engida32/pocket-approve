@@ -19,25 +19,29 @@ function topicFor(id) {
   return createHash("sha256").update(id).digest("base64url").slice(0, 32);
 }
 
+function desktopTitle(item) {
+  return cap(`[${cap(item.serverLabel, MAX_LABEL)}] ${item.title}`, MAX_TITLE);
+}
+
 function requestPayload(item, count) {
   return {
     id: item.id,
     serverId: item.serverId,
     serverLabel: cap(item.serverLabel, MAX_LABEL),
-    title: cap(`[${cap(item.serverLabel, MAX_LABEL)}] ${item.title}`, MAX_TITLE),
+    title: cap(item.title, MAX_TITLE),
     summary: cap(item.summary, MAX_SUMMARY),
     count,
     kind: "request",
   };
 }
 
-function digestPayload(serverLabel, count) {
+function digestPayload(serverLabel, newCount, count) {
   const id = `digest:${randomUUID()}`;
   return {
     id,
     serverId: null,
     serverLabel: cap(serverLabel, MAX_LABEL),
-    title: cap(`${cap(serverLabel, MAX_LABEL)}: ${count} new requests`, MAX_TITLE),
+    title: cap(`${cap(serverLabel, MAX_LABEL)}: ${newCount} new requests`, MAX_TITLE),
     summary: "Open Pocket Approve to review them.",
     count,
     kind: "digest",
@@ -67,7 +71,6 @@ export function createNotifications({
   devices,
   desktop,
   audit,
-  now = () => Date.now(),
   log = console,
 } = {}) {
   for (const [name, value] of Object.entries({ fleet, seen, push, devices, desktop })) {
@@ -106,52 +109,18 @@ export function createNotifications({
     return pushes;
   }
 
-  async function announce(link) {
-    const snapshot = fleet.pending();
-    const activeIds = new Set(snapshot.requests.map((item) => item.id));
-    await seen.observe(activeIds);
-    const mine = snapshot.requests.filter((item) => item.serverId === link?.id);
-    const fresh = await seen.takeNew(mine);
-    if (fresh.length === 0) return { desktop: 0, pushes: 0, digest: false };
-
-    const label = link?.label ?? fresh[0]?.serverLabel ?? "";
-
-    if (fresh.length > DIGEST_THRESHOLD) {
-      const payload = shrink(digestPayload(label, fresh.length));
-      let pushes = 0;
-      try {
-        pushes = await pushToDevices(payload);
-      } catch (error) {
-        logError("notifications: digest push failed", error);
-      }
-      if (typeof desktop?.notify === "function") {
-        Promise.resolve(
-          desktop.notify({
-            id: payload.id,
-            title: payload.title,
-            summary: payload.summary,
-            actions: false,
-          }),
-        ).catch((error) => logError("notifications: digest desktop failed", error));
-      }
-      return { desktop: 1, pushes, digest: true };
+  function notifyDesktop(item, title, summary) {
+    if (typeof desktop?.notify !== "function") return false;
+    let pending;
+    try {
+      pending = desktop.notify({ id: item.id, title, summary });
+    } catch (error) {
+      logError(`notifications: desktop failed for ${item.id}`, error);
+      return true;
     }
-
-    let notes = 0;
-    for (const item of fresh) {
-      const payload = shrink(requestPayload(item, fresh.length));
-      let answer = null;
-      try {
-        answer = await desktop.notify?.({
-          id: item.id,
-          title: payload.title,
-          summary: payload.summary,
-        });
-        notes += 1;
-      } catch (error) {
-        logError(`notifications: desktop failed for ${item.id}`, error);
-      }
-      if (answer && DECISIONS.has(answer.decision)) {
+    Promise.resolve(pending)
+      .then(async (answer) => {
+        if (!answer || !DECISIONS.has(answer.decision)) return;
         try {
           const result = await fleet.reply(item.id, answer.decision);
           await audit?.append("reply", {
@@ -163,14 +132,68 @@ export function createNotifications({
         } catch (error) {
           logError(`notifications: reply failed for ${item.id}`, error);
         }
+      })
+      .catch((error) => logError(`notifications: desktop failed for ${item.id}`, error));
+    return true;
+  }
+
+  async function announce(link) {
+    const snapshot = fleet.pending();
+    const totalPending = snapshot.requests.length;
+    const activeIds = new Set(snapshot.requests.map((item) => item.id));
+    await seen.observe(activeIds);
+    const mine = snapshot.requests.filter((item) => item.serverId === link?.id);
+    const fresh = await seen.takeNew(mine);
+    if (fresh.length === 0) return { desktop: 0, pushes: 0, digest: false };
+
+    const label = link?.label ?? fresh[0]?.serverLabel ?? "";
+
+    if (fresh.length > DIGEST_THRESHOLD) {
+      const payload = shrink(digestPayload(label, fresh.length, totalPending));
+      let pushes = 0;
+      if (!fits(payload)) {
+        logError("notifications: digest payload exceeds the body limit; skipping push");
+      } else {
+        try {
+          pushes = await pushToDevices(payload);
+        } catch (error) {
+          logError("notifications: digest push failed", error);
+        }
       }
+      let notes = 0;
+      if (typeof desktop?.notify === "function") {
+        try {
+          const pending = desktop.notify({
+            id: payload.id,
+            title: payload.title,
+            summary: payload.summary,
+            actions: false,
+          });
+          notes = 1;
+          Promise.resolve(pending).catch((error) =>
+            logError("notifications: digest desktop failed", error),
+          );
+        } catch (error) {
+          logError("notifications: digest desktop failed", error);
+        }
+      }
+      return { desktop: notes, pushes, digest: true };
     }
 
+    let notes = 0;
     let pushes = 0;
-    try {
-      pushes = await pushToDevices(shrink(requestPayload(fresh[0], fresh.length)));
-    } catch (error) {
-      logError("notifications: push failed", error);
+    for (const item of fresh) {
+      const payload = shrink(requestPayload(item, totalPending));
+      if (notifyDesktop(item, desktopTitle(item), payload.summary)) notes += 1;
+      if (!fits(payload)) {
+        logError(`notifications: payload for ${item.id} exceeds the body limit; skipping push`);
+        continue;
+      }
+      try {
+        pushes += await pushToDevices(payload);
+      } catch (error) {
+        logError(`notifications: push failed for ${item.id}`, error);
+      }
     }
     return { desktop: notes, pushes, digest: false };
   }
@@ -186,6 +209,10 @@ export function createNotifications({
       count: fleet.pending().requests.length,
       kind: "test",
     });
+    if (!fits(payload)) {
+      logError("notifications: test payload exceeds the body limit; skipping push");
+      return { sent: 0, failed: 0, pruned: 0 };
+    }
     const result = await push.send(payload, {
       deviceId: deviceId ?? null,
       options: optionsFor(payload),

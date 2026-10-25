@@ -52,16 +52,21 @@ function harness(items) {
   };
 }
 
+async function flush() {
+  await new Promise((resolve) => setImmediate(resolve));
+  await new Promise((resolve) => setImmediate(resolve));
+}
+
 test("new requests are announced once, capped, and routed on desktop action", async () => {
   const h = harness([request("1"), request("2")]);
   const notifications = createNotifications(h.dependencies);
   const first = await notifications.announce({ id: "alpha" });
   const second = await notifications.announce({ id: "alpha" });
   assert.equal(first.desktop, 2);
-  assert.equal(first.pushes, 1);
+  assert.equal(first.pushes, 2);
   assert.equal(second.desktop, 0);
   assert.equal(second.pushes, 0);
-  assert.equal(h.pushed.length, 1);
+  assert.equal(h.pushed.length, 2);
   const { payload, options } = h.pushed[0];
   assert.equal(payload.kind, "request");
   assert.equal(payload.serverLabel, "Alpha");
@@ -72,6 +77,8 @@ test("new requests are announced once, capped, and routed on desktop action", as
   assert.equal(options.options.urgency, "high");
   assert.equal(options.options.topic.length <= 32, true);
   assert.equal(Buffer.byteLength(JSON.stringify(payload)) < 3584, true);
+  assert.deepEqual(h.pushed.map((entry) => entry.payload.id), ["alpha:1", "alpha:2"]);
+  await flush();
   assert.deepEqual(h.replies, [{ id: "alpha:2", decision: "reject" }]);
 });
 
@@ -132,9 +139,11 @@ test("announce only reports requests for the link's server", async () => {
   assert.equal(first.desktop, 1);
   assert.equal(first.pushes, 1);
   assert.equal(h.pushed[0].payload.serverId, "alpha");
+  assert.equal(h.pushed[0].payload.count, 2);
   const second = await notifications.announce({ id: "beta", label: "Beta" });
   assert.equal(second.desktop, 1);
   assert.equal(h.pushed.at(-1).payload.serverId, "beta");
+  assert.equal(h.pushed.at(-1).payload.count, 2);
 });
 
 test("ten new requests stay individual requests, not a digest", async () => {
@@ -144,7 +153,8 @@ test("ten new requests stay individual requests, not a digest", async () => {
   const result = await notifications.announce({ id: "alpha" });
   assert.equal(result.digest, false);
   assert.equal(result.desktop, 10);
-  assert.equal(result.pushes, 1);
+  assert.equal(result.pushes, 10);
+  assert.equal(h.pushed.length, 10);
   assert.equal(h.pushed[0].payload.kind, "request");
 });
 
@@ -157,6 +167,7 @@ test("desktop once and always decisions are routed through fleet.reply", async (
   const notifications = createNotifications(h.dependencies);
   const result = await notifications.announce({ id: "alpha" });
   assert.equal(result.desktop, 2);
+  await flush();
   assert.deepEqual(h.replies, [
     { id: "alpha:1", decision: "once" },
     { id: "alpha:2", decision: "always" },
@@ -171,4 +182,41 @@ test("a test with no device uses the unowned legacy path", async () => {
   assert.deepEqual(result, { sent: 1, failed: 0, pruned: 0 });
   assert.equal(h.pushed[0].options.deviceId, null);
   assert.deepEqual(h.replies, []);
+});
+
+test("an oversized id is never pushed but is still shown on the desktop", async () => {
+  const big = request("big", { id: "alpha:" + "x".repeat(4096) });
+  const small = request("1");
+  const h = harness([big, small]);
+  h.dependencies.log = { error() {} };
+  const notifications = createNotifications(h.dependencies);
+  const result = await notifications.announce({ id: "alpha" });
+  assert.equal(result.desktop, 2);
+  assert.equal(result.pushes, 1);
+  assert.equal(h.pushed.length, 1);
+  assert.equal(h.pushed[0].payload.id, "alpha:1");
+  assert.equal(Buffer.byteLength(JSON.stringify(h.pushed[0].payload)) < 3584, true);
+});
+
+test("the digest count is the total fleet pending count, not just the new ones", async () => {
+  const items = Array.from({ length: 11 }, (_, index) => request(String(index)));
+  items.push(request("9", { id: "beta:9", serverId: "beta", serverLabel: "Beta" }));
+  const h = harness(items);
+  const notifications = createNotifications(h.dependencies);
+  const result = await notifications.announce({ id: "alpha" });
+  assert.equal(result.digest, true);
+  assert.equal(result.pushes, 1);
+  assert.equal(h.pushed[0].payload.count, 12);
+  assert.match(h.pushed[0].payload.title, /11 new requests/);
+});
+
+test("a digest without a desktop notifier reports zero desktop attempts", async () => {
+  const items = Array.from({ length: 11 }, (_, index) => request(String(index)));
+  const h = harness(items);
+  delete h.dependencies.desktop.notify;
+  const notifications = createNotifications(h.dependencies);
+  const result = await notifications.announce({ id: "alpha" });
+  assert.equal(result.digest, true);
+  assert.equal(result.desktop, 0);
+  assert.equal(result.pushes, 1);
 });
