@@ -1,11 +1,11 @@
 import { execFile } from "node:child_process";
-import { chmod, mkdir, rm } from "node:fs/promises";
+import { chmod, mkdir, readFile, rm } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { promisify } from "node:util";
 import webpush from "web-push";
 import { DATA_DIR } from "../lib/config.mjs";
-import { loadConfigV2 } from "../lib/config-v2.mjs";
+import { loadConfigV2, parseOrigin } from "../lib/config-v2.mjs";
 import {
   backupV2Setup,
   buildMeta,
@@ -29,6 +29,45 @@ function usage() {
   --force                  overwrite config (a timestamped backup is written)`);
 }
 
+async function lenientPrevious() {
+  const raw = JSON.parse(await readFile(join(DATA_DIR, "config.json"), "utf8"));
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return null;
+  const previous = {};
+  if (raw.mode === "proxy" || raw.mode === "lan") previous.mode = raw.mode;
+  if (typeof raw.host === "string" && raw.host.length > 0) previous.host = raw.host;
+  for (const name of ["httpPort", "httpsPort", "setupPort"]) {
+    if (Number.isInteger(raw[name]) && raw[name] >= 1 && raw[name] <= 65_535) {
+      previous[name] = raw[name];
+    }
+  }
+  if (Number.isInteger(raw.pollIntervalMs)
+    && raw.pollIntervalMs >= 2000
+    && raw.pollIntervalMs <= 10_000) {
+    previous.pollIntervalMs = raw.pollIntervalMs;
+  }
+  if (typeof raw.publicOrigin === "string") {
+    try {
+      previous.publicOrigin = parseOrigin(raw.publicOrigin, { name: "publicOrigin" });
+    } catch {
+      // An invalid old origin is not a safe field to carry forward.
+    }
+  }
+  if (typeof raw.token === "string") previous.token = raw.token;
+  if (typeof raw.pairingSecret === "string" && raw.pairingSecret.length >= 20) {
+    previous.pairingSecret = raw.pairingSecret;
+  }
+  if (raw.vapid && typeof raw.vapid === "object"
+    && typeof raw.vapid.publicKey === "string"
+    && typeof raw.vapid.privateKey === "string") {
+    previous.vapid = {
+      subject: raw.vapid.subject,
+      publicKey: raw.vapid.publicKey,
+      privateKey: raw.vapid.privateKey,
+    };
+  }
+  return previous;
+}
+
 async function previousConfig(options) {
   try {
     return { previous: await loadConfigV2(), unreadable: null };
@@ -36,9 +75,13 @@ async function previousConfig(options) {
     if (/No config/.test(error.message)) return { previous: null, unreadable: null };
     if (!options.force) throw error;
     if (/must not use plain HTTP/.test(error.message)) {
+      if (options.servers.length > 0) {
+        return { previous: await lenientPrevious(), unreadable: null };
+      }
       throw new Error(
         "existing config has a plain-HTTP non-loopback upstream. "
-        + "Pass --server id=https://your-host (or a loopback http URL), or fix config.json. "
+        + "Fix the upstream URL in config.json to https or loopback http, "
+        + "or delete config.json, then rerun with --force. "
         + "Insecure upstreams are not enabled automatically.",
       );
     }

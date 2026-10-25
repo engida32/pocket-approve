@@ -216,22 +216,64 @@ test("a corrupt config without --force fails and is left untouched", async (t) =
   assert.equal(backups.length, 0);
 });
 
-test("--force refuses to inherit a plain-HTTP non-loopback v1 upstream", async (t) => {
+test("--force with --server replaces a plain-HTTP non-loopback v1 upstream", async (t) => {
   const dir = await mkdtemp(join(tmpdir(), "pa-setup-v2-legacy-"));
   t.after(() => rm(dir, { recursive: true, force: true }));
   const legacy = JSON.stringify({
     host: "192.168.1.5",
     token: "legacy-token",
-    opencodeUrl: "http://10.0.0.5:4096",
+    opencodeUrl: "http://192.168.1.10:4096",
+    vapid: VAPID,
+    pairingSecret: "pairing-secret-that-is-long-enough",
   });
   await writeFile(join(dir, "config.json"), legacy);
 
-  await assert.rejects(runSetup(dir, proxyArgs(["--force"])), (error) => {
-    assert.equal(error.code, 1);
-    assert.match(error.stderr, /plain-HTTP/);
-    assert.match(error.stderr, /--server/);
-    assert.doesNotMatch(error.stderr, /legacy-token/);
-    return true;
+  const { stdout, stderr } = await runSetup(dir, [
+    "--mode", "proxy",
+    "--public-origin", "https://approve.example.com",
+    "--server", "local=https://10.0.0.5:4096",
+    "--no-qr",
+    "--force",
+  ]);
+  assert.match(`${stdout}${stderr}`, /Backup: /);
+  const written = JSON.parse(await readFile(join(dir, "config.json"), "utf8"));
+  assert.equal(written.mode, "proxy");
+  assert.equal(written.servers.length, 1);
+  assert.equal(written.servers[0].id, "local");
+  assert.equal(written.servers[0].url, "https://10.0.0.5:4096");
+  assert.equal(written.vapid.publicKey, VAPID.publicKey);
+  assert.equal(written.vapid.privateKey, VAPID.privateKey);
+  assert.equal(written.pairingSecret, "pairing-secret-that-is-long-enough");
+});
+
+test("--force without --server fails with a working remedy", async (t) => {
+  const dir = await mkdtemp(join(tmpdir(), "pa-setup-v2-legacy-"));
+  t.after(() => rm(dir, { recursive: true, force: true }));
+  const legacy = JSON.stringify({
+    host: "192.168.1.5",
+    token: "legacy-token",
+    opencodeUrl: "http://192.168.1.10:4096",
   });
+  await writeFile(join(dir, "config.json"), legacy);
+
+  await assert.rejects(
+    runSetup(dir, [
+      "--mode", "proxy",
+      "--public-origin", "https://approve.example.com",
+      "--no-qr",
+      "--force",
+    ]),
+    (error) => {
+      assert.equal(error.code, 1);
+      assert.match(error.stderr, /plain-HTTP/);
+      assert.match(error.stderr, /delete config\.json/);
+      assert.match(error.stderr, /then rerun with --force/);
+      assert.doesNotMatch(error.stderr, /--server/);
+      assert.doesNotMatch(error.stderr, /legacy-token/);
+      return true;
+    },
+  );
   assert.equal(await readFile(join(dir, "config.json"), "utf8"), legacy);
+  const backups = (await readdir(dir)).filter((name) => name.startsWith("backup-"));
+  assert.equal(backups.length, 0);
 });
