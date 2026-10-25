@@ -120,3 +120,56 @@ test("start retries after a failed listen and stop stays safe", async (t) => {
   assert.equal(devices.ok, true);
   assert.deepEqual(devices.devices, []);
 });
+
+test("half-closed client still receives a delayed pair response", async (t) => {
+  const dir = await temp(t);
+  const socketPath = join(dir, "admin.sock");
+  const admin = createAdmin({
+    socketPath,
+    config: {
+      mode: "proxy",
+      publicOrigin: "https://approve.example.com",
+      servers: [{ id: "local", label: "Laptop", url: "http://127.0.0.1:4096" }],
+      vapid: { publicKey: "pub" },
+      pairingSecret: "12345678901234567890",
+    },
+    devices: { list: () => [], activeCount: () => 0 },
+    pairing: {
+      open: async () => {
+        await new Promise((resolve) => setTimeout(resolve, 25));
+        return { code: "ABCD-EFGH", expiresAt: "2026-10-25T12:10:00.000Z" };
+      },
+    },
+    push: { removeByDevice: async () => 0 },
+    fleet: { servers: () => [] },
+    audit: { append: async () => { await new Promise((resolve) => setTimeout(resolve, 25)); } },
+  });
+  await admin.start();
+  t.after(() => admin.stop());
+  const result = await new Promise((resolve, reject) => {
+    const socket = connect(socketPath);
+    const timer = setTimeout(() => {
+      socket.destroy();
+      reject(new Error("timed out waiting for the pair response"));
+    }, 2000);
+    let data = "";
+    socket.setEncoding("utf8");
+    socket.on("connect", () => socket.end(JSON.stringify({ command: "pair", label: "Half close" }) + "\n"));
+    socket.on("data", (chunk) => { data += chunk; });
+    socket.on("end", () => {
+      clearTimeout(timer);
+      try {
+        resolve(JSON.parse(data));
+      } catch (error) {
+        reject(error);
+      }
+    });
+    socket.on("error", (error) => {
+      clearTimeout(timer);
+      reject(error);
+    });
+  });
+  assert.equal(result.ok, true);
+  assert.equal(result.code, "ABCD-EFGH");
+  assert.equal(result.url, "https://approve.example.com/pair#code=ABCD-EFGH");
+});

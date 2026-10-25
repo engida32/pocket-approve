@@ -74,10 +74,18 @@ export function createAdmin({
 
   async function start() {
     if (server) return;
-    const created = createServer((socket) => {
+    const created = createServer({ allowHalfOpen: true }, (socket) => {
       let data = "";
+      let pending = false;
       socket.setEncoding("utf8");
+      socket.on("error", () => {
+        log?.error?.("admin: socket error");
+      });
+      socket.on("end", () => {
+        if (!pending) socket.end();
+      });
       socket.on("data", (chunk) => {
+        if (pending) return;
         data += chunk;
         if (data.length > 64 * 1024) {
           socket.end(line({ ok: false, error: "request_too_large" }));
@@ -94,6 +102,7 @@ export function createAdmin({
           socket.end(line({ ok: false, error: "invalid_json" }));
           return;
         }
+        pending = true;
         handle(message)
           .then((result) => socket.end(line(result)))
           .catch((error) => {
