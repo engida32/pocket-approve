@@ -2,8 +2,9 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 
-const root = new URL("../", import.meta.url).pathname;
+const root = fileURLToPath(new URL("../", import.meta.url));
 const read = (name) => readFile(join(root, name), "utf8");
 
 function pngSize(buffer) {
@@ -26,17 +27,24 @@ test("manifest declares a stable id, standalone display, and installable icons",
 });
 
 test("PNG icons have the declared dimensions", async () => {
-  const expected = [
-    ["public/icon-192.png", 192],
-    ["public/icon-512.png", 512],
-    ["public/icon-maskable-512.png", 512],
-    ["public/apple-touch-icon.png", 180],
-  ];
-  for (const [name, size] of expected) {
-    const buffer = await readFile(join(root, name));
+  const manifest = JSON.parse(await read("public/manifest.webmanifest"));
+  const declared = new Map(
+    manifest.icons.map((icon) => [`${icon.sizes}:${icon.purpose}`, icon]),
+  );
+  for (const [key, size] of [
+    ["192x192:any", 192],
+    ["512x512:any", 512],
+    ["512x512:maskable", 512],
+  ]) {
+    const icon = declared.get(key);
+    assert.ok(icon, key);
+    assert.equal(icon.sizes, `${size}x${size}`, key);
+    const buffer = await readFile(join(root, "public", icon.src));
     const actual = pngSize(buffer);
-    assert.deepEqual(actual, { width: size, height: size }, name);
+    assert.deepEqual(actual, { width: size, height: size }, icon.src);
   }
+  const apple = await readFile(join(root, "public/apple-touch-icon.png"));
+  assert.deepEqual(pngSize(apple), { width: 180, height: 180 }, "public/apple-touch-icon.png");
 });
 
 test("shell has pairing, install, inbox, and settings surfaces without inline script", async () => {

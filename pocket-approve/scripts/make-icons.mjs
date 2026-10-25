@@ -1,8 +1,9 @@
 import { mkdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { deflateSync } from "node:zlib";
+import { fileURLToPath } from "node:url";
 
-const OUT = new URL("../public/", import.meta.url).pathname;
+const OUT = fileURLToPath(new URL("../public/", import.meta.url));
 
 const CRC_TABLE = Array.from({ length: 256 }, (_, n) => {
   let c = n;
