@@ -6,6 +6,7 @@ import { createApp } from "./lib/app.mjs";
 import { DATA_DIR, loadConfig } from "./lib/config.mjs";
 import { createDesktop } from "./lib/desktop.mjs";
 import { createClient } from "./lib/opencode.mjs";
+import { createPoller } from "./lib/poller.mjs";
 import { createPush } from "./lib/push.mjs";
 import { readTls } from "./lib/tls.mjs";
 
@@ -33,6 +34,12 @@ function closeServer(server) {
   return new Promise((resolve) => {
     server.close(() => resolve());
   });
+}
+
+const POLL_INTERVAL_MS = 2000;
+
+function logFailure(what, error) {
+  console.error(`pocket-approve: ${what}: ${error?.message ?? String(error)}`);
 }
 
 export async function start() {
@@ -66,10 +73,41 @@ export async function start() {
     throw error;
   }
 
+  const poller = createPoller({
+    source,
+    intervalMs: POLL_INTERVAL_MS,
+    onNew(request) {
+      desktop
+        .notify(request)
+        .then(({ decision }) => {
+          if (!decision) return;
+          return app.state.reply(request.id, decision).catch((error) => {
+            logFailure(`desktop reply failed for ${request.id}`, error);
+          });
+        })
+        .catch((error) => {
+          logFailure(`desktop notification failed for ${request.id}`, error);
+        });
+
+      push
+        .send({
+          requestId: request.id,
+          title: request.title,
+          summary: request.summary,
+        })
+        .catch((error) => {
+          logFailure(`push failed for ${request.id}`, error);
+        });
+    },
+  });
+
+  poller.start();
+
   let stopping = false;
   async function stop() {
     if (stopping) return;
     stopping = true;
+    poller.stop();
     desktop.stop?.();
     await Promise.all([closeServer(httpsServer), closeServer(setupServer)]);
   }
@@ -85,7 +123,7 @@ export async function start() {
     });
   });
 
-  return { config, app, httpsServer, setupServer, desktop, stop };
+  return { config, app, httpsServer, setupServer, desktop, poller, stop };
 }
 
 if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {
