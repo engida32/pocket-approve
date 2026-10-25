@@ -341,3 +341,26 @@ test("an upstream 404 on reply maps to not_found and drops the card", async (t) 
   assert.deepEqual(await fleet.reply("a:per_1", "reject"), { status: 404, error: "not_found" });
   assert.equal(fleet.pending().requests.length, 0);
 });
+
+test("an upstream 409 on reply maps to conflict and drops the card", async (t) => {
+  const server = http.createServer((req, res) => {
+    if (req.method === "GET" && req.url === "/permission") {
+      return json(res, 200, [permission()]);
+    }
+    if (req.method === "POST" && req.url === "/permission/per_1/reply") {
+      return json(res, 409, { error: "conflict" });
+    }
+    json(res, 404, { error: "not found" });
+  });
+  const { url } = await listen(server);
+  const fleet = createFleet({ config: shortConfig(url), log: quietLog() });
+  t.after(async () => {
+    await fleet.stop();
+    await new Promise((resolve) => server.close(resolve));
+  });
+
+  await fleet.init();
+  await fleet.refreshAll();
+  assert.deepEqual(await fleet.reply("a:per_1", "once"), { status: 409, error: "conflict" });
+  assert.equal(fleet.pending().requests.length, 0);
+});
