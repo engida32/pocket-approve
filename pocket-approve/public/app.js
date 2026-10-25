@@ -1,505 +1,653 @@
-const TOKEN_STORAGE_KEY = "pocketApproveToken";
 const DB_NAME = "pocket-approve";
-const DB_VERSION = 1;
-const AUTH_STORE = "auth";
-const TOKEN_RECORD_KEY = "token";
-const POLL_MS = 4000;
-const POLL_ERROR_MS = 8000;
-const NOTICE_MS = 10_000;
+const DB_VERSION = 2;
+const SESSION_KEY = "current";
+const POLL_MS = 10_000;
+const ERROR_POLL_MS = 20_000;
 
-const DECISIONS = [
-  ["once", "Allow once"],
-  ["reject", "Deny"],
-  ["always", "Allow always"],
+const decisions = [
+  { id: "once", label: "Allow once" },
+  { id: "reject", label: "Deny" },
+  { id: "always", label: "Allow always" },
 ];
 
 const state = {
-  token: "",
-  unauthorized: false,
-  loading: false,
+  session: null,
+  requests: [],
+  servers: [],
+  fetchedAt: null,
+  busy: new Set(),
   timer: null,
   noticeTimer: null,
-  requests: [],
-  busy: new Set(),
   registration: null,
-  connected: false,
+  focusId: null,
+  deepLinkHandled: false,
+  reloading: false,
 };
 
 const els = {
-  status: document.getElementById("status"),
-  notice: document.getElementById("notice"),
-  enable: document.getElementById("enable-notifications"),
-  test: document.getElementById("send-test"),
-  pending: document.getElementById("pending"),
-  empty: document.getElementById("empty"),
+  installGate: document.querySelector("#install-gate"),
+  pairSection: document.querySelector("#pair-section"),
+  pairForm: document.querySelector("#pair-form"),
+  pairCode: document.querySelector("#pair-code"),
+  deviceName: document.querySelector("#device-name"),
+  pairButton: document.querySelector("#pair-button"),
+  pairError: document.querySelector("#pair-error"),
+  appSection: document.querySelector("#app-section"),
+  offline: document.querySelector("#offline-banner"),
+  offlineText: document.querySelector("#offline-text"),
+  count: document.querySelector("#pending-count"),
+  pending: document.querySelector("#pending"),
+  empty: document.querySelector("#empty"),
+  settingsButton: document.querySelector("#settings-button"),
+  settings: document.querySelector("#settings-dialog"),
+  deviceSummary: document.querySelector("#device-summary"),
+  enable: document.querySelector("#enable-notifications"),
+  test: document.querySelector("#send-test"),
+  unpair: document.querySelector("#unpair-button"),
+  closeSettings: document.querySelector("#close-settings"),
+  pushStatus: document.querySelector("#push-status"),
+  always: document.querySelector("#always-dialog"),
+  alwaysConfirm: document.querySelector("#always-confirm"),
+  alwaysCancel: document.querySelector("#always-cancel"),
+  update: document.querySelector("#update-banner"),
+  updateButton: document.querySelector("#update-button"),
+  status: document.querySelector("#status"),
+  notice: document.querySelector("#notice"),
 };
 
 class ApiError extends Error {
-  constructor(status, cause) {
-    super(status ? `request failed with status ${status}` : "network request failed", {
-      cause,
-    });
+  constructor(status, code, payload) {
+    super(code || `HTTP ${status}`);
     this.status = status;
+    this.code = code;
+    this.payload = payload;
   }
 }
 
 function setStatus(text) {
-  els.status.textContent = text;
+  if (els.status) els.status.textContent = text;
 }
 
-function setNotice(text) {
-  els.notice.textContent = text;
+function notice(text, ms = 10_000) {
+  if (!els.notice) return;
   clearTimeout(state.noticeTimer);
+  state.noticeTimer = null;
+  els.notice.textContent = text;
+  els.notice.hidden = !text;
   if (text) {
     state.noticeTimer = setTimeout(() => {
       els.notice.textContent = "";
-    }, NOTICE_MS);
+      els.notice.hidden = true;
+      state.noticeTimer = null;
+    }, ms);
   }
 }
 
-function tokenFromHash() {
-  const params = new URLSearchParams(window.location.hash.replace(/^#/, ""));
-  const token = params.get("token");
-  return token ? token.trim() : "";
+function setPairError(text) {
+  if (!els.pairError) return;
+  els.pairError.textContent = text;
+  els.pairError.hidden = !text;
 }
 
-function clearHash() {
-  if (window.location.hash) {
-    history.replaceState(null, "", window.location.pathname + window.location.search);
-  }
+function renderDeviceSummary(paired) {
+  if (!els.deviceSummary) return;
+  els.deviceSummary.textContent = paired ? state.session.deviceName || "This device" : "";
 }
 
-function openDatabase() {
+function isIos() {
+  const ua = navigator.userAgent || "";
+  return /iPad|iPhone|iPod/.test(ua) || (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1);
+}
+
+function isStandalone() {
+  return window.navigator.standalone === true || window.matchMedia("(display-mode: standalone)").matches;
+}
+
+function isInstalledContext() {
+  return !isIos() || isStandalone();
+}
+
+function openDb() {
   return new Promise((resolve, reject) => {
     const request = indexedDB.open(DB_NAME, DB_VERSION);
     request.onupgradeneeded = () => {
-      const db = request.result;
-      if (!db.objectStoreNames.contains(AUTH_STORE)) {
-        db.createObjectStore(AUTH_STORE);
+      if (!request.result.objectStoreNames.contains("session")) {
+        request.result.createObjectStore("session");
       }
     };
-    request.onblocked = () => reject(new Error("IndexedDB blocked"));
     request.onsuccess = () => resolve(request.result);
     request.onerror = () => reject(request.error);
   });
 }
 
-async function readStoredToken() {
-  try {
-    const db = await openDatabase();
-    try {
-      return await new Promise((resolve, reject) => {
-        const request = db
-          .transaction(AUTH_STORE, "readonly")
-          .objectStore(AUTH_STORE)
-          .get(TOKEN_RECORD_KEY);
-        request.onsuccess = () => {
-          resolve(typeof request.result === "string" ? request.result : "");
-        };
-        request.onerror = () => reject(request.error);
-      });
-    } finally {
-      db.close();
-    }
-  } catch {
-    return "";
-  }
+async function readSession() {
+  const db = await openDb();
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction("session", "readonly");
+    const request = tx.objectStore("session").get(SESSION_KEY);
+    request.onsuccess = () => resolve(request.result ?? null);
+    request.onerror = () => reject(request.error);
+    tx.oncomplete = () => db.close();
+  });
 }
 
-async function writeStoredToken(token) {
-  const db = await openDatabase();
-  try {
-    await new Promise((resolve, reject) => {
-      const transaction = db.transaction(AUTH_STORE, "readwrite");
-      transaction.objectStore(AUTH_STORE).put(token, TOKEN_RECORD_KEY);
-      transaction.oncomplete = () => resolve();
-      transaction.onerror = () => reject(transaction.error);
-      transaction.onabort = () => reject(transaction.error);
-    });
-  } finally {
-    db.close();
-  }
+async function writeSession(value) {
+  const db = await openDb();
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction("session", "readwrite");
+    tx.objectStore("session").put(value, SESSION_KEY);
+    tx.oncomplete = () => { db.close(); resolve(); };
+    tx.onerror = () => { db.close(); reject(tx.error); };
+  });
 }
 
-async function storeToken(token) {
-  try {
-    localStorage.setItem(TOKEN_STORAGE_KEY, token);
-  } catch {}
-  try {
-    await writeStoredToken(token);
-  } catch (error) {
-    console.error("Pocket Approve: could not save the token in IndexedDB", error);
-  }
-}
-
-async function resolveToken() {
-  const fromHash = tokenFromHash();
-  if (fromHash) {
-    clearHash();
-    await storeToken(fromHash);
-    return fromHash;
-  }
-  let local = "";
-  try {
-    local = localStorage.getItem(TOKEN_STORAGE_KEY) ?? "";
-  } catch {}
-  const stored = await readStoredToken();
-  const token = local || stored;
-  if (token) await storeToken(token);
-  return token;
+async function clearSession() {
+  const db = await openDb();
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction("session", "readwrite");
+    tx.objectStore("session").delete(SESSION_KEY);
+    tx.oncomplete = () => { db.close(); resolve(); };
+    tx.onerror = () => { db.close(); reject(tx.error); };
+  });
 }
 
 async function api(path, options = {}) {
-  const headers = new Headers(options.headers);
-  headers.set("Authorization", `Bearer ${state.token}`);
-  if (typeof options.body === "string") {
-    headers.set("Content-Type", "application/json");
-  }
-  let response;
-  try {
-    response = await fetch(path, { ...options, headers, cache: "no-store" });
-  } catch (error) {
-    throw new ApiError(0, error);
-  }
-  return response;
+  const headers = { ...(options.headers ?? {}) };
+  if (state.session?.token) headers.authorization = `Bearer ${state.session.token}`;
+  if (options.body) headers["content-type"] = "application/json";
+  const response = await fetch(path, {
+    ...options,
+    headers,
+    credentials: "same-origin",
+    cache: "no-store",
+  });
+  let payload = null;
+  try { payload = await response.json(); } catch {}
+  if (!response.ok) throw new ApiError(response.status, payload?.error, payload);
+  return payload;
 }
 
-function schedule(ms) {
-  clearTimeout(state.timer);
-  state.timer = setTimeout(loadPending, ms);
+function renderSession() {
+  const paired = Boolean(state.session?.token);
+  els.installGate.hidden = isInstalledContext();
+  els.pairSection.hidden = paired || !isInstalledContext();
+  els.appSection.hidden = !paired;
+  els.settingsButton.hidden = !paired;
+  renderDeviceSummary(paired);
+  if (!paired && isInstalledContext()) {
+    const stored = sessionStorage.getItem("pending-pair-code");
+    if (stored) {
+      els.pairCode.value = stored;
+      sessionStorage.removeItem("pending-pair-code");
+    }
+  }
+  if (paired) loadPending();
 }
 
-async function loadPending() {
-  if (state.loading || state.unauthorized || !state.token) return;
-  state.loading = true;
-  clearTimeout(state.timer);
-  let delay = POLL_MS;
+function pairFromHash() {
+  if (!location.hash) return false;
+  const params = new URLSearchParams(location.hash.slice(1));
+  const code = params.get("code");
+  if (code) sessionStorage.setItem("pending-pair-code", code);
+  const legacy = params.get("token");
+  history.replaceState(null, "", location.pathname + location.search);
+  return { code, legacy };
+}
+
+async function boot() {
+  const hash = pairFromHash();
+  if (hash?.legacy) {
+    const existing = await readSession();
+    if (!existing || existing.origin !== location.origin) {
+      await writeSession({ token: hash.legacy, origin: location.origin, deviceId: null, deviceName: "Legacy token", pairedAt: new Date().toISOString() });
+    }
+  }
+  state.session = await readSession();
+  if (state.session && state.session.origin !== location.origin) {
+    await clearSession();
+    state.session = null;
+    notice("This app was paired with a different address. Pair this device again.");
+  }
+  wireEvents();
+  renderSession();
+  if (!state.session) {
+    if (new URLSearchParams(location.search).get("error") === "auth") {
+      setPairError("This device was disconnected. Pair again.");
+      history.replaceState(null, "", location.pathname);
+    }
+    return;
+  }
+  await setupWorker();
+  await loadPending();
+  refreshVapidFingerprint().catch(() => {});
+  refreshSubscription().catch(() => {});
+}
+
+async function pair(event) {
+  event.preventDefault();
+  setPairError("");
+  els.pairButton.disabled = true;
+  const code = els.pairCode.value.trim();
+  const deviceName = els.deviceName.value.trim();
+  if (!code || !deviceName) {
+    setPairError("Enter the pairing code and a device name.");
+    els.pairButton.disabled = false;
+    return;
+  }
   try {
-    const response = await api("/api/pending");
-    if (response.status === 401) {
-      state.unauthorized = true;
-      state.connected = false;
-      setStatus("Token rejected. Open the setup link again with the current token.");
-      return;
-    }
-    if (!response.ok) throw new ApiError(response.status);
-    const data = await response.json();
-    if (!Array.isArray(data)) throw new ApiError(0);
-    state.connected = true;
-    render(data);
+    const result = await api("/api/pair", {
+      method: "POST",
+      body: JSON.stringify({ code, deviceName }),
+    });
+    state.session = {
+      token: result.token,
+      origin: location.origin,
+      deviceId: result.device.id,
+      deviceName: result.device.name,
+      pairedAt: new Date().toISOString(),
+      pushFingerprint: null,
+      pushOrigin: null,
+    };
+    await writeSession(state.session);
+    els.pairForm.reset();
+    setPairError("");
+    setStatus("This device is paired.");
+    renderSession();
+    await setupWorker();
+    await loadPending();
   } catch (error) {
-    state.connected = false;
-    delay = POLL_ERROR_MS;
-    if (error instanceof ApiError && error.status) {
-      setStatus(`Server error (${error.status}). Retrying.`);
-    } else {
-      setStatus("Cannot reach the server. Retrying.");
-    }
+    if (error.status === 410) setPairError("Pairing code expired. Run npm run pair again.");
+    else if (error.status === 429) setPairError("Too many attempts. Wait a minute and try again.");
+    else setPairError("That pairing code did not work. Check the code and try again.");
   } finally {
-    state.loading = false;
-    if (!state.unauthorized) schedule(delay);
+    els.pairButton.disabled = false;
   }
 }
 
-function render(requests) {
-  state.requests = Array.isArray(requests) ? requests : [];
+function serverById(id) {
+  return state.servers.find((server) => server.id === id) ?? null;
+}
+
+function serverState(server) {
+  if (!server) return "unknown";
+  if (server.lastError === "disabled") return "disabled";
+  return server.ok ? "online" : "offline";
+}
+
+function render() {
   els.pending.replaceChildren();
-  let count = 0;
-  for (const request of state.requests) {
-    if (!request || typeof request.id !== "string" || request.id.length === 0) continue;
-    els.pending.append(renderRequest(request));
-    count++;
+  const fragment = document.createDocumentFragment();
+  for (const request of state.requests) fragment.append(renderRequest(request));
+  els.pending.append(fragment);
+  const count = state.requests.length;
+  els.count.textContent = count === 0 ? "No requests" : `${count} waiting`;
+  els.empty.hidden = count !== 0;
+  const offline = state.servers.filter((server) => !server.ok && server.lastError !== "disabled");
+  els.offline.hidden = offline.length === 0;
+  els.offlineText.textContent = offline.length
+    ? `Offline: ${offline.map((server) => server.label || server.id).join(", ")}. Showing the last known requests.`
+    : "";
+  if ("setAppBadge" in navigator) {
+    if (count > 0) navigator.setAppBadge(count).catch(() => {});
+    else if (navigator.clearAppBadge) navigator.clearAppBadge().catch(() => {});
   }
-  els.empty.hidden = count > 0;
-  if (state.connected) {
-    setStatus(count === 0 ? "Connected. No pending requests." : `Connected. ${count} pending.`);
-  }
+  applyDeepLink();
 }
 
 function renderRequest(request) {
   const item = document.createElement("li");
-  item.className = "request";
-  item.dataset.id = request.id;
+  item.className = "request card";
+  item.dataset.requestId = request.id;
+
+  const head = document.createElement("div");
+  head.className = "card-head";
+  const pill = document.createElement("span");
+  pill.className = `server-chip ${serverState(serverById(request.serverId))}`;
+  pill.textContent = request.serverLabel || request.serverId;
+  const when = document.createElement("time");
+  when.dateTime = request.firstSeen ?? "";
+  when.title = request.firstSeen ? new Date(request.firstSeen).toLocaleString() : "";
+  when.textContent = relativeTime(request.firstSeen);
+  head.append(pill, when);
 
   const title = document.createElement("h3");
-  title.textContent =
-    typeof request.title === "string" && request.title.length > 0
-      ? request.title
-      : "Permission request";
+  title.tabIndex = -1;
+  title.id = `request-${request.id.replace(/[^a-zA-Z0-9_-]/g, "-")}`;
+  title.textContent = request.title || request.permission || "Permission request";
 
   const summary = document.createElement("p");
   summary.className = "summary";
-  summary.textContent =
-    typeof request.summary === "string" && request.summary.length > 0
-      ? request.summary
-      : "No details.";
+  summary.textContent = request.summary || "(no details)";
 
-  const decisions = document.createElement("div");
-  decisions.className = "decisions";
-  const busy = state.busy.has(request.id);
-  for (const [decision, label] of DECISIONS) {
+  const actions = document.createElement("div");
+  actions.className = "actions";
+  for (const decision of decisions) {
     const button = document.createElement("button");
     button.type = "button";
-    button.textContent = label;
-    button.disabled = busy;
-    button.addEventListener("click", () => {
-      void reply(request.id, decision, label);
-    });
-    decisions.append(button);
+    button.className = decision.id === "reject" ? "danger" : decision.id === "always" ? "quiet" : "primary";
+    button.textContent = decision.label;
+    button.disabled = state.busy.has(request.id);
+    button.addEventListener("click", () => choose(request, decision.id));
+    actions.append(button);
   }
 
-  item.append(title, summary, decisions);
+  item.append(head, title, summary, actions);
+  item.setAttribute("aria-busy", state.busy.has(request.id) ? "true" : "false");
   return item;
 }
 
-function removeRequest(id) {
-  state.requests = state.requests.filter((request) => request?.id !== id);
-  render(state.requests);
+function relativeTime(value) {
+  if (!value) return "";
+  const seconds = Math.max(0, Math.round((Date.now() - Date.parse(value)) / 1000));
+  if (seconds < 60) return "just now";
+  if (seconds < 3600) return `${Math.floor(seconds / 60)} min ago`;
+  if (seconds < 86400) return `${Math.floor(seconds / 3600)} h ago`;
+  return `${Math.floor(seconds / 86400)} d ago`;
 }
 
-async function reply(id, decision, label) {
-  if (state.busy.has(id) || state.unauthorized) return;
-  state.busy.add(id);
-  render(state.requests);
+function choose(request, decision) {
+  if (decision === "always") {
+    state.alwaysRequest = request;
+    els.always.showModal();
+    return;
+  }
+  reply(request, decision);
+}
+
+async function reply(request, decision) {
+  if (state.busy.has(request.id)) return;
+  state.busy.add(request.id);
+  updateCardBusy(request.id);
   try {
-    const response = await api("/api/reply", {
+    await api("/api/reply", {
       method: "POST",
-      body: JSON.stringify({ id, decision }),
+      body: JSON.stringify({ id: request.id, decision }),
     });
-    if (response.status === 200) {
-      setNotice(`Answered: ${label}.`);
-      state.busy.delete(id);
-      removeRequest(id);
-      await loadPending();
-      return;
+    state.requests = state.requests.filter((item) => item.id !== request.id);
+    setStatus("Answered.");
+    render();
+  } catch (error) {
+    if (error.status === 401) {
+      await handleUnauthorized();
+    } else if (error.status === 404 || error.status === 409) {
+      state.requests = state.requests.filter((item) => item.id !== request.id);
+      notice("Already answered or expired.");
+      render();
+    } else if (error.status === 502) {
+      notice("Could not reach that OpenCode server. The request is still here.");
+    } else {
+      notice("Could not send that answer. Try again.");
     }
-    if (response.status === 404) {
-      setNotice("That request is no longer pending.");
-      state.busy.delete(id);
-      removeRequest(id);
-      await loadPending();
-      return;
-    }
-    if (response.status === 401) {
-      state.unauthorized = true;
-      state.connected = false;
-      state.busy.delete(id);
-      render(state.requests);
-      setStatus("Token rejected. Open the setup link again with the current token.");
-      setNotice("The server rejected the token, so nothing was answered.");
-      return;
-    }
-    setNotice(`The server could not record that answer (${response.status}). Try again.`);
-  } catch {
-    setNotice("Cannot reach the server. Try again.");
+  } finally {
+    state.busy.delete(request.id);
+    updateCardBusy(request.id);
   }
-  state.busy.delete(id);
-  render(state.requests);
 }
 
-function decodeBase64Url(value) {
-  const padding = "=".repeat((4 - (value.length % 4)) % 4);
-  const base64 = (value + padding).replace(/-/g, "+").replace(/_/g, "/");
-  const raw = atob(base64);
-  const bytes = new Uint8Array(raw.length);
-  for (let index = 0; index < raw.length; index++) {
-    bytes[index] = raw.charCodeAt(index);
+function updateCardBusy(id) {
+  const card = els.pending.querySelector(`[data-request-id="${CSS.escape(id)}"]`);
+  if (!card) return;
+  const busy = state.busy.has(id);
+  card.setAttribute("aria-busy", busy ? "true" : "false");
+  for (const button of card.querySelectorAll("button")) button.disabled = busy;
+}
+
+async function handleUnauthorized() {
+  await clearSession();
+  state.session = null;
+  state.requests = [];
+  state.servers = [];
+  render();
+  renderSession();
+  setPairError("This device was disconnected. Pair again.");
+  setStatus("Device disconnected.");
+}
+
+async function loadPending() {
+  if (!state.session || document.hidden) return;
+  clearTimeout(state.timer);
+  setStatus("Refreshing.");
+  try {
+    const result = await api("/api/pending");
+    state.requests = Array.isArray(result.requests) ? result.requests : [];
+    state.servers = Array.isArray(result.servers) ? result.servers : [];
+    state.fetchedAt = result.fetchedAt ?? null;
+    render();
+    setStatus(`${state.requests.length} waiting.`);
+    state.timer = setTimeout(loadPending, POLL_MS);
+  } catch (error) {
+    if (error.status === 401) {
+      await handleUnauthorized();
+      return;
+    }
+    if (error.status === 502) notice("Server offline. Showing the last known requests.");
+    else notice("Could not reach Pocket Approve.");
+    setStatus("Offline.");
+    state.timer = setTimeout(loadPending, ERROR_POLL_MS);
   }
-  return bytes;
 }
 
-function pushSupported() {
-  return (
-    "Notification" in window &&
-    "serviceWorker" in navigator &&
-    "PushManager" in window
-  );
+function applyDeepLink() {
+  if (state.deepLinkHandled) return;
+  const params = new URLSearchParams(location.search);
+  const id = params.get("request");
+  if (id) {
+    state.focusId = id;
+    const card = els.pending.querySelector(`[data-request-id="${CSS.escape(id)}"]`);
+    if (!card) {
+      notice("Already answered or expired.");
+      state.deepLinkHandled = true;
+      history.replaceState(null, "", location.pathname);
+      return;
+    }
+    const heading = card.querySelector("h3");
+    heading?.focus();
+    card.scrollIntoView({ block: "center" });
+    state.deepLinkHandled = true;
+    history.replaceState(null, "", location.pathname);
+  }
+  const error = params.get("error");
+  if (error === "auth") handleUnauthorized();
+  else if (error === "offline") notice("Could not reach the server. The request is still waiting.");
+  else if (error === "answered") notice("Already answered or expired.");
 }
 
-async function registerWorker() {
+function pushAvailable() {
+  if (!("Notification" in window) || !("serviceWorker" in navigator) || !("PushManager" in window)) return false;
+  if (isIos() && !isStandalone()) return false;
+  return true;
+}
+
+async function setupWorker() {
   if (!("serviceWorker" in navigator)) return null;
   try {
-    const registration = await navigator.serviceWorker.register("/sw.js", {
-      scope: "/",
+    state.registration = await navigator.serviceWorker.register("/sw.js", { scope: "/" });
+    state.registration.addEventListener("updatefound", () => {
+      const worker = state.registration.installing;
+      worker?.addEventListener("statechange", () => {
+        if (worker.state === "installed" && navigator.serviceWorker.controller) els.update.hidden = false;
+      });
     });
-    state.registration = registration;
-    return registration;
-  } catch (error) {
-    console.error("Pocket Approve: service worker registration failed", error);
-    state.registration = null;
+    if (state.registration.waiting && navigator.serviceWorker.controller) els.update.hidden = false;
+    navigator.serviceWorker.addEventListener("controllerchange", () => {
+      if (!state.reloading) {
+        state.reloading = true;
+        location.reload();
+      }
+    });
+    return state.registration;
+  } catch {
     return null;
   }
 }
 
-async function activeRegistration() {
-  if (!state.registration) {
-    const registered = await registerWorker();
-    if (!registered) throw new Error("the service worker was not registered");
-  }
-  return new Promise((resolve, reject) => {
-    const timer = setTimeout(() => {
-      reject(new Error("the service worker did not start"));
-    }, 10_000);
-    navigator.serviceWorker.ready.then(
-      (registration) => {
-        clearTimeout(timer);
-        resolve(registration);
-      },
-      (error) => {
-        clearTimeout(timer);
-        reject(error);
-      },
-    );
-  });
+function base64UrlToBytes(value) {
+  const padded = value.replace(/-/g, "+").replace(/_/g, "/") + "===".slice((value.length + 3) % 4);
+  return Uint8Array.from(atob(padded), (char) => char.charCodeAt(0));
 }
 
-async function refreshNotificationButton() {
-  if (!pushSupported()) {
-    els.enable.textContent = "Notifications not supported";
-    els.enable.disabled = true;
+function bytesToBase64Url(bytes) {
+  let binary = "";
+  for (const byte of new Uint8Array(bytes)) binary += String.fromCharCode(byte);
+  return btoa(binary).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+}
+
+async function currentKey() {
+  const result = await api("/api/vapid-public-key");
+  return { ...result, bytes: base64UrlToBytes(result.publicKey) };
+}
+
+async function refreshVapidFingerprint() {
+  if (!pushAvailable()) return;
+  const key = await currentKey();
+  if (state.session.pushFingerprint && state.session.pushFingerprint !== key.fingerprint) {
+    els.pushStatus.textContent = "Notifications were set up for a different key. Enable them again.";
+    const registration = state.registration ?? await setupWorker();
+    const subscription = await registration?.pushManager.getSubscription();
+    await subscription?.unsubscribe();
+  }
+}
+
+async function refreshSubscription() {
+  if (!pushAvailable()) return;
+  const registration = state.registration ?? await setupWorker();
+  if (!registration) return;
+  const subscription = await registration.pushManager.getSubscription();
+  if (!subscription) {
+    els.pushStatus.textContent = "Notifications are not enabled on this device.";
     return;
   }
-  if (Notification.permission === "denied") {
-    els.enable.textContent = "Notifications blocked";
-    els.enable.disabled = false;
+  const key = await currentKey();
+  const existing = subscription.options?.applicationServerKey;
+  if (existing && bytesToBase64Url(existing) !== key.publicKey) {
+    await subscription.unsubscribe();
+    els.pushStatus.textContent = "Notifications were set up for a different key. Enable them again.";
     return;
   }
-  let subscription = null;
-  try {
-    const registration = await navigator.serviceWorker.getRegistration("/");
-    subscription = await registration?.pushManager.getSubscription();
-  } catch {}
-  els.enable.textContent = subscription ? "Notifications on" : "Enable notifications";
-  els.enable.disabled = false;
+  await api("/api/subscribe", {
+    method: "POST",
+    body: JSON.stringify({ subscription: subscription.toJSON() }),
+  });
+  if (state.session.pushFingerprint !== key.fingerprint || state.session.pushOrigin !== location.origin) {
+    state.session = { ...state.session, pushFingerprint: key.fingerprint, pushOrigin: location.origin };
+    await writeSession(state.session);
+  }
+  els.pushStatus.textContent = "Notifications are on for this device.";
 }
 
 async function enableNotifications() {
-  if (!pushSupported()) {
-    setNotice("This browser does not support notifications from a web app.");
+  if (!pushAvailable()) {
+    els.pushStatus.textContent = isIos() && !isStandalone()
+      ? "Add Pocket Approve to your Home Screen first."
+      : "This browser does not support notifications.";
     return;
   }
   els.enable.disabled = true;
   try {
     const permission = await Notification.requestPermission();
     if (permission !== "granted") {
-      setNotice(
-        permission === "denied"
-          ? "Notifications are blocked in your browser settings."
-          : "Notification permission was not granted.",
-      );
+      els.pushStatus.textContent = permission === "denied"
+        ? "Notifications are blocked. Enable them in Settings."
+        : "Notifications were not enabled.";
       return;
     }
-
-    const registration = await activeRegistration();
-    const keyResponse = await api("/api/vapid-public-key");
-    if (!keyResponse.ok) {
-      setNotice(`Could not read the push key from the server (${keyResponse.status}).`);
-      return;
-    }
-    const keyData = await keyResponse.json();
-    const publicKey = typeof keyData?.publicKey === "string" ? keyData.publicKey : "";
-    if (!publicKey) {
-      setNotice("The server has no push key. Run the setup command again.");
-      return;
-    }
-
+    const registration = state.registration ?? await setupWorker();
+    const key = await currentKey();
     let subscription = await registration.pushManager.getSubscription();
     if (!subscription) {
       subscription = await registration.pushManager.subscribe({
         userVisibleOnly: true,
-        applicationServerKey: decodeBase64Url(publicKey),
+        applicationServerKey: key.bytes,
       });
     }
-
-    const response = await api("/api/subscribe", {
+    await api("/api/subscribe", {
       method: "POST",
-      body: JSON.stringify(subscription.toJSON()),
+      body: JSON.stringify({ subscription: subscription.toJSON() }),
     });
-    if (!response.ok) {
-      setNotice(`The server did not save this subscription (${response.status}).`);
-      return;
-    }
-    setNotice("Notifications are enabled on this device.");
-  } catch (error) {
-    setNotice(`Could not enable notifications: ${error?.message ?? "unknown error"}.`);
+    state.session = { ...state.session, pushFingerprint: key.fingerprint, pushOrigin: location.origin };
+    await writeSession(state.session);
+    els.pushStatus.textContent = "Notifications are on for this device.";
+    setStatus("Notifications enabled.");
+  } catch {
+    els.pushStatus.textContent = "Notifications could not be enabled. Try again.";
   } finally {
-    await refreshNotificationButton();
+    els.enable.disabled = false;
   }
 }
 
 async function sendTest() {
-  if (!state.token) return;
   els.test.disabled = true;
   try {
-    const response = await api("/api/test-notification", {
-      method: "POST",
-      body: "{}",
-    });
-    if (!response.ok) {
-      setNotice(`The test notification failed (${response.status}).`);
-      return;
-    }
-    const result = await response.json();
-    const sent = Number(result?.sent) || 0;
-    const failed = Number(result?.failed) || 0;
-    if (sent === 0 && failed === 0) {
-      setNotice("No devices are subscribed. Enable notifications first.");
-    } else if (failed > 0) {
-      setNotice(`Sent to ${sent} and failed for ${failed}.`);
-    } else {
-      setNotice(`Sent to ${sent} ${sent === 1 ? "device" : "devices"}.`);
-    }
+    const result = await api("/api/test-notification", { method: "POST", body: "{}" });
+    if (result.sent > 0) els.pushStatus.textContent = "Test sent.";
+    else if (result.failed > 0) els.pushStatus.textContent = "Test failed. Check notifications for this app.";
+    else els.pushStatus.textContent = "No subscription is registered for this device.";
   } catch {
-    setNotice("Cannot reach the server to send a test notification.");
+    els.pushStatus.textContent = "Test notification failed.";
   } finally {
     els.test.disabled = false;
   }
 }
 
+async function unpair() {
+  els.unpair.disabled = true;
+  try {
+    const registration = state.registration ?? await setupWorker();
+    const subscription = await registration?.pushManager.getSubscription();
+    if (subscription) {
+      await api("/api/unsubscribe", {
+        method: "POST",
+        body: JSON.stringify({ endpoint: subscription.endpoint }),
+      }).catch(() => {});
+      await subscription.unsubscribe().catch(() => {});
+    }
+  } finally {
+    await clearSession();
+    state.session = null;
+    state.requests = [];
+    state.servers = [];
+    render();
+    renderSession();
+    els.settings.close();
+    els.pushStatus.textContent = "";
+    els.unpair.disabled = false;
+  }
+}
+
 function wireEvents() {
-  els.enable.addEventListener("click", () => {
-    void enableNotifications();
+  els.pairForm?.addEventListener("submit", pair);
+  els.settingsButton?.addEventListener("click", () => els.settings.showModal());
+  els.closeSettings?.addEventListener("click", () => els.settings.close());
+  els.enable?.addEventListener("click", enableNotifications);
+  els.test?.addEventListener("click", sendTest);
+  els.unpair?.addEventListener("click", unpair);
+  els.alwaysCancel?.addEventListener("click", () => els.always.close());
+  els.alwaysConfirm?.addEventListener("click", async () => {
+    const request = state.alwaysRequest;
+    els.always.close();
+    if (request) await reply(request, "always");
   });
-  els.test.addEventListener("click", () => {
-    void sendTest();
-  });
-  window.addEventListener("hashchange", () => {
-    const token = tokenFromHash();
-    if (!token) return;
-    clearHash();
-    void (async () => {
-      await storeToken(token);
-      state.token = token;
-      state.unauthorized = false;
-      state.connected = false;
-      els.test.disabled = false;
-      await registerWorker();
-      await refreshNotificationButton();
-      setNotice("Token updated.");
-      await loadPending();
-    })();
+  els.updateButton?.addEventListener("click", () => {
+    state.registration?.waiting?.postMessage({ type: "SKIP_WAITING" });
   });
   document.addEventListener("visibilitychange", () => {
-    if (document.visibilityState === "visible" && state.token && !state.unauthorized) {
-      void loadPending();
+    if (document.hidden) {
+      clearTimeout(state.timer);
+      state.timer = null;
+      setStatus("Paused.");
+    } else {
+      state.registration?.update().catch(() => {});
+      loadPending();
     }
+  });
+  window.addEventListener("online", loadPending);
+  window.addEventListener("offline", () => {
+    setStatus("Offline.");
+    notice("Your phone is offline. Showing the last known requests.");
   });
 }
 
-async function init() {
-  wireEvents();
-  state.token = await resolveToken();
-  if (!state.token) {
-    setStatus("No token. Open the link printed by npm run setup, which ends in #token=.");
-    els.enable.disabled = true;
-    els.test.disabled = true;
-    return;
-  }
-
-  await registerWorker();
-  await refreshNotificationButton();
-  setStatus("Connecting.");
-  await loadPending();
-}
-
-void init();
+boot().catch((error) => {
+  console.error(error);
+  setPairError("Pocket Approve could not start. Reload the page.");
+});
