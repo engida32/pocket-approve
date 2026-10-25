@@ -48,6 +48,7 @@ export function createFleet({
   const links = [];
   let started = false;
   let stopped = false;
+  let lifecycle = 0;
 
   function makeLink(server) {
     const link = {
@@ -70,6 +71,8 @@ export function createFleet({
       inFlight: null,
       replyInFlight: new Set(),
       failures: 0,
+      version: 0,
+      replied: new Map(),
       configError: null,
       disabled: server.enabled === false,
     };
@@ -96,24 +99,29 @@ export function createFleet({
     return link;
   }
 
-  function schedule(link) {
+  function forget(link, rawId) {
+    link.cache.delete(rawId);
+    link.replied.set(rawId, ++link.version);
+  }
+
+  function schedule(link, token) {
     if (link.disabled || link.configError) return;
-    if (started && !stopped) {
-      const base = link.failures > 0
-        ? BACKOFF_MS[Math.min(link.failures - 1, BACKOFF_MS.length - 1)]
-        : config.pollIntervalMs;
-      link.timer = setTimeout(() => {
-        link.timer = null;
-        poll(link).finally(() => schedule(link));
-      }, jitter(base, random));
-      link.timer.unref?.();
-    }
+    if (token !== lifecycle || !started || stopped) return;
+    const base = link.failures > 0
+      ? BACKOFF_MS[Math.min(link.failures - 1, BACKOFF_MS.length - 1)]
+      : config.pollIntervalMs;
+    link.timer = setTimeout(() => {
+      link.timer = null;
+      poll(link).finally(() => schedule(link, token));
+    }, jitter(base, random));
+    link.timer.unref?.();
   }
 
   async function poll(link) {
     if (link.disabled || link.configError) return false;
     if (link.inFlight) return link.inFlight;
     const startedAt = now();
+    const versionAtStart = link.version;
     link.inFlight = (async () => {
       try {
         const listed = await link.source.list();
@@ -121,11 +129,15 @@ export function createFleet({
         const next = new Map();
         for (const raw of listed) {
           if (!raw || typeof raw.id !== "string" || raw.id === "") continue;
+          if ((link.replied.get(raw.id) ?? 0) > versionAtStart) continue;
           const existing = link.cache.get(raw.id);
           next.set(raw.id, { raw, firstSeen: existing?.firstSeen ?? new Date(startedAt).toISOString() });
         }
         while (next.size > MAX_PER_SERVER) next.delete(next.keys().next().value);
         link.cache = next;
+        for (const [rawId, version] of link.replied) {
+          if (version <= versionAtStart) link.replied.delete(rawId);
+        }
         link.failures = 0;
         link.health.ok = true;
         link.health.lastSuccess = new Date(now()).toISOString();
@@ -156,6 +168,7 @@ export function createFleet({
   }
 
   async function init({ quiet = false } = {}) {
+    if (links.length > 0) return links;
     for (const server of config.servers) links.push(makeLink(server));
     if (!quiet) {
       try {
@@ -170,17 +183,21 @@ export function createFleet({
   }
 
   function start() {
+    if (links.length === 0) return;
     if (started) return;
     started = true;
+    stopped = false;
+    const token = ++lifecycle;
     for (const link of links) {
       if (link.disabled || link.configError) continue;
-      poll(link).finally(() => schedule(link));
+      poll(link).finally(() => schedule(link, token));
     }
   }
 
   async function stop() {
     stopped = true;
     started = false;
+    lifecycle += 1;
     for (const link of links) {
       if (link.timer) clearTimeout(link.timer);
       link.timer = null;
@@ -222,12 +239,12 @@ export function createFleet({
     link.replyInFlight.add(parsed.rawId);
     try {
       await link.source.reply(parsed.rawId, decision);
-      link.cache.delete(parsed.rawId);
+      forget(link, parsed.rawId);
       return { status: 200 };
     } catch (error) {
       const status = Number(error?.status);
       if (status === 404 || status === 409) {
-        link.cache.delete(parsed.rawId);
+        forget(link, parsed.rawId);
         return { status, error: status === 404 ? "not_found" : "conflict" };
       }
       if (status === 401 || status === 403) {
