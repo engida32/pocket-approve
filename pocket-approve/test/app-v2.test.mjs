@@ -312,3 +312,116 @@ test("static /pair is public and the service worker is not cached", async () => 
   const dot = await call(app, "/.env", { token: null });
   assert.equal(dot.response.status, 404);
 });
+
+test("unknown api paths return 404 before authentication", async () => {
+  const seen = [];
+  const { app } = makeApp({ audit: { append: async (action, fields) => seen.push({ action, fields }) } });
+  for (const method of ["GET", "DELETE", "PUT", "OPTIONS"]) {
+    for (const token of ["good", "bad", null]) {
+      const { response } = await call(app, "/api/nope", { method, token });
+      assert.equal(response.status, 404, `${method} ${token}`);
+      assert.equal(response.headers.get("allow"), null, `${method} ${token} allow`);
+    }
+  }
+  assert.deepEqual(seen, []);
+});
+
+test("authentication failures are limited and still return 401", async () => {
+  const seen = [];
+  const { app } = makeApp({ audit: { append: async (action, fields) => seen.push({ action, fields }) } });
+  const first = await call(app, "/api/pending", { token: "bad" });
+  assert.equal(first.response.status, 401);
+  assert.equal(seen.filter((item) => item.action === "auth_failed").length, 1);
+  for (let index = 0; index < 59; index += 1) {
+    app.rateLimiter.take("auth:global", 60, 60_000);
+  }
+  const limited = await call(app, "/api/pending", { token: "bad" });
+  assert.equal(limited.response.status, 401);
+  assert.equal(seen.filter((item) => item.action === "auth_failed").length, 1);
+});
+
+test("subscribe separates invalid input from push storage failures", async () => {
+  const subscription = {
+    endpoint: "https://push.example/own",
+    expirationTime: null,
+    keys: { p256dh: "p", auth: "a" },
+  };
+  const invalid = makeApp({
+    push: {
+      publicKey: "public-key",
+      add: async () => { throw new TypeError("bad subscription"); },
+      listForDevice: () => [],
+      remove: async () => false,
+    },
+  });
+  const rejected = await call(invalid.app, "/api/subscribe", {
+    method: "POST",
+    body: { subscription },
+    origin: "https://approve.example.com",
+  });
+  assert.equal(rejected.response.status, 400);
+  assert.equal(rejected.body.error, "invalid_subscription");
+
+  const broken = makeApp({
+    push: {
+      publicKey: "public-key",
+      add: async () => { throw Object.assign(new Error("disk full"), { code: "ENOSPC" }); },
+      listForDevice: () => [],
+      remove: async () => false,
+    },
+  });
+  const failed = await call(broken.app, "/api/subscribe", {
+    method: "POST",
+    body: { subscription },
+    origin: "https://approve.example.com",
+  });
+  assert.equal(failed.response.status, 500);
+  assert.equal(failed.body.error, "subscribe_failed");
+});
+
+test("test notifications reject oversized bodies", async () => {
+  const { app, events } = makeApp();
+  const large = await call(app, "/api/test-notification", {
+    method: "POST",
+    body: { pad: "x".repeat(17_000) },
+    origin: "https://approve.example.com",
+  });
+  assert.equal(large.response.status, 413);
+  assert.deepEqual(events.tests, []);
+});
+
+test("test notification rate limit does not block unsubscribe", async () => {
+  const { app, events } = makeApp();
+  const subscription = {
+    endpoint: "https://push.example/own",
+    expirationTime: null,
+    keys: { p256dh: "p", auth: "a" },
+  };
+  const subscribed = await call(app, "/api/subscribe", {
+    method: "POST",
+    body: { subscription },
+    origin: "https://approve.example.com",
+  });
+  assert.equal(subscribed.response.status, 201);
+  for (let index = 0; index < 10; index += 1) {
+    const sent = await call(app, "/api/test-notification", {
+      method: "POST",
+      body: {},
+      origin: "https://approve.example.com",
+    });
+    assert.equal(sent.response.status, 200);
+  }
+  const limited = await call(app, "/api/test-notification", {
+    method: "POST",
+    body: {},
+    origin: "https://approve.example.com",
+  });
+  assert.equal(limited.response.status, 429);
+  const removed = await call(app, "/api/unsubscribe", {
+    method: "POST",
+    body: { endpoint: subscription.endpoint },
+    origin: "https://approve.example.com",
+  });
+  assert.equal(removed.response.status, 204);
+  assert.equal(events.tests.length, 10);
+});

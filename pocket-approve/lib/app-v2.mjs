@@ -16,6 +16,12 @@ const WRITE_ROUTES = new Set([
   "/api/unsubscribe",
   "/api/test-notification",
 ]);
+const KNOWN_API_PATHS = new Set([
+  ...READ_ROUTES,
+  ...WRITE_ROUTES,
+  "/api/health",
+  "/api/pair",
+]);
 const STATIC = new Map([
   ["/", "index.html"],
   ["/index.html", "index.html"],
@@ -235,8 +241,12 @@ export function createAppV2({
         .some((item) => item.endpoint === subscription.endpoint);
       try {
         await push.add(subscription, identity.device.id);
-      } catch {
-        return fail(400, "invalid_subscription");
+      } catch (error) {
+        if (error instanceof TypeError) return fail(400, "invalid_subscription");
+        const code = typeof error?.code === "string" ? error.code : null;
+        if (code) log?.error?.("app-v2: subscribe failed", code);
+        else log?.error?.("app-v2: subscribe failed");
+        return fail(500, "subscribe_failed");
       }
       await audit?.append("subscribe", { deviceId: identity.device.id, result: "ok" });
       const subscriptions = push.listForDevice(identity.device.id).length;
@@ -259,13 +269,11 @@ export function createAppV2({
       return new Response(null, { status: 204 });
     }
     if (path === "/api/test-notification") {
-      const wait = await rate(identity, "subscribe", 10);
+      const wait = await rate(identity, "test", 10);
       if (wait) return tooMany(wait);
+      const body = await readBody(request);
+      if (body.tooLarge) return fail(413, "body_too_large");
       const result = await notifications.sendTest(identity.device?.id ?? null);
-      await audit?.append("test_notification", {
-        deviceId: identity.device?.id ?? "legacy",
-        result: result.failed > 0 ? "partial" : "ok",
-      });
       return json(result);
     }
     return fail(404, "not_found");
@@ -275,6 +283,8 @@ export function createAppV2({
     const url = new URL(request.url);
     const path = url.pathname;
     const view = headerView(request);
+
+    if (path.startsWith("/api/") && !KNOWN_API_PATHS.has(path)) return fail(404, "not_found");
 
     if (path === "/api/health") {
       if (request.method !== "GET") return fail(405, "method_not_allowed", { allow: "GET" });
@@ -330,17 +340,11 @@ export function createAppV2({
 
     const identity = await authenticator.authenticate(request);
     if (!identity) {
-      await audit?.append("auth_failed", { result: "invalid_token" });
+      const wait = rateLimiter.take("auth:global", 60, 60_000);
+      if (wait === 0) await audit?.append("auth_failed", { result: "invalid_token" });
       return fail(401, "unauthorized");
     }
 
-    const known = READ_ROUTES.has(path) || WRITE_ROUTES.has(path);
-    if (!known) {
-      if (request.method !== "GET" && request.method !== "POST") {
-        return fail(405, "method_not_allowed", { allow: "GET, POST" });
-      }
-      return fail(404, "not_found");
-    }
     if (request.method !== "GET" && request.method !== "POST") {
       return fail(405, "method_not_allowed", { allow: READ_ROUTES.has(path) ? "GET" : "POST" });
     }
