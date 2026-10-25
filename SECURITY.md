@@ -4,7 +4,7 @@ Pocket Approve sits between you and a process that can run commands. Treat the O
 
 ## Supported versions
 
-Design phase. No released version yet. Security fixes will target the latest release once v1 ships.
+v1 is implemented and the automated suite passes. The live phone and desktop path is pending manual verification. Security fixes target the latest v1 release; include the version from `pocket-approve/package.json` and the commit you run.
 
 ## Reporting a vulnerability
 

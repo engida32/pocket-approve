@@ -1,0 +1,36 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="theme-color" content="#111111">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="default">
+<title>Pocket Approve</title>
+<link rel="manifest" href="/manifest.webmanifest">
+<link rel="icon" href="/icon.svg" type="image/svg+xml">
+<link rel="apple-touch-icon" href="/icon.svg">
+<link rel="stylesheet" href="/style.css">
+</head>
+<body>
+<main>
+  <header>
+    <h1>Pocket Approve</h1>
+    <p id="status" class="status" role="status" aria-live="polite">Loading.</p>
+    <p id="notice" class="notice" role="status" aria-live="polite"></p>
+  </header>
+
+  <div class="actions">
+    <button id="enable-notifications" type="button">Enable notifications</button>
+    <button id="send-test" type="button">Send test</button>
+  </div>
+
+  <section aria-labelledby="pending-heading">
+    <h2 id="pending-heading">Pending requests</h2>
+    <p id="empty" class="empty">No pending requests.</p>
+    <ul id="pending" class="pending"></ul>
+  </section>
+</main>
+<script src="/app.js" type="module"></script>
+</body>
+</html>
