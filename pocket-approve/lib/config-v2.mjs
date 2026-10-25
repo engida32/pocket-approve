@@ -25,10 +25,14 @@ function activeDataDir() {
   return dataDir;
 }
 
+function bareHost(host) {
+  if (typeof host !== "string") return host;
+  return host.startsWith("[") && host.endsWith("]") ? host.slice(1, -1) : host;
+}
+
 export function isLoopbackHost(host) {
   if (typeof host !== "string") return false;
-  const bare = host.startsWith("[") && host.endsWith("]") ? host.slice(1, -1) : host;
-  return LOOPBACK.has(bare);
+  return LOOPBACK.has(bareHost(host));
 }
 
 function validPort(value, name) {
@@ -209,11 +213,12 @@ export function normalizeConfig(raw = {}) {
   };
 
   if (mode === "proxy") {
-    if (!isLoopbackHost(base.host)) throw new Error("proxy mode host must be loopback");
+    const host = bareHost(base.host);
+    if (!isLoopbackHost(host)) throw new Error("proxy mode host must be loopback");
     if (!raw.publicOrigin) throw new Error("proxy mode requires publicOrigin");
     const publicOrigin = parseOrigin(raw.publicOrigin, { name: "publicOrigin" });
     const httpPort = validPort(raw.httpPort ?? 8080, "httpPort");
-    return { ...base, httpPort, publicOrigin, httpsPort: 8443, setupPort: 8081 };
+    return { ...base, host, httpPort, publicOrigin, httpsPort: 8443, setupPort: 8081 };
   }
 
   const host = validLanHost(base.host);

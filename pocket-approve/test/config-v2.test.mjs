@@ -255,3 +255,23 @@ test("rejects mistyped enabled, trustProxy, and directory fields", async () => {
   assert.equal(ok.trustProxy, false);
   assert.equal(ok.servers[0].directory, "/work");
 });
+
+test("normalizes bracketed loopback proxy hosts to the bindable bare form", async () => {
+  const { normalizeConfig } = await import("../lib/config-v2.mjs?" + Date.now());
+  const base = {
+    mode: "proxy",
+    publicOrigin: "https://approve.example.com",
+    servers: [{ id: "local", url: "http://127.0.0.1:4096" }],
+  };
+  const ipv6 = normalizeConfig({ ...base, host: "[::1]" });
+  assert.equal(ipv6.host, "::1");
+  assert.equal(ipv6.publicOrigin, "https://approve.example.com");
+
+  const ipv4 = normalizeConfig({ ...base, host: "[127.0.0.1]" });
+  assert.equal(ipv4.host, "127.0.0.1");
+
+  assert.throws(
+    () => normalizeConfig({ ...base, host: "[192.168.1.5]" }),
+    /loopback/i,
+  );
+});
