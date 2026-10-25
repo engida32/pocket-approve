@@ -11,11 +11,15 @@ const appPath = fileURLToPath(new URL("../public/app.js", import.meta.url));
 test("client is syntactically valid and has no unsafe token storage", async () => {
   const source = await readFile(appPath, "utf8");
   await run(process.execPath, ["--check", appPath]);
-  assert.equal(source.includes("localStorage"), false);
+  assert.equal(source.includes("localStorage.setItem"), false);
+  assert.equal(source.includes("localStorage.getItem"), false);
+  assert.equal(source.includes("localStorage.removeItem"), true);
+  assert.equal(source.includes('deleteObjectStore("auth")'), true);
   assert.equal(source.includes('params.get("token")'), true);
   assert.equal(source.includes('createObjectStore("session")'), true);
   assert.equal(source.includes("/api/pair"), true);
   assert.equal(source.includes("/api/pending"), true);
+  assert.equal(source.includes("/api/subscribe"), true);
   assert.equal(source.includes("applicationServerKey"), true);
   assert.equal(source.includes("visibilitychange"), true);
   assert.equal(source.includes("navigator.standalone"), true);

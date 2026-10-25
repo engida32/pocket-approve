@@ -1,6 +1,7 @@
 const DB_NAME = "pocket-approve";
 const DB_VERSION = 2;
 const SESSION_KEY = "current";
+const LEGACY_TOKEN_KEY = "pocketApproveToken";
 const POLL_MS = 10_000;
 const ERROR_POLL_MS = 20_000;
 
@@ -21,6 +22,9 @@ const state = {
   registration: null,
   focusId: null,
   deepLinkHandled: false,
+  errorHandled: false,
+  unauthorizedHandling: false,
+  pushNeedsSetup: false,
   reloading: false,
 };
 
@@ -107,13 +111,19 @@ function isInstalledContext() {
   return !isIos() || isStandalone();
 }
 
+function forgetLegacyToken() {
+  try {
+    localStorage.removeItem(LEGACY_TOKEN_KEY);
+  } catch {}
+}
+
 function openDb() {
   return new Promise((resolve, reject) => {
     const request = indexedDB.open(DB_NAME, DB_VERSION);
     request.onupgradeneeded = () => {
-      if (!request.result.objectStoreNames.contains("session")) {
-        request.result.createObjectStore("session");
-      }
+      const db = request.result;
+      if (db.objectStoreNames.contains("auth")) db.deleteObjectStore("auth");
+      if (!db.objectStoreNames.contains("session")) db.createObjectStore("session");
     };
     request.onsuccess = () => resolve(request.result);
     request.onerror = () => reject(request.error);
@@ -195,6 +205,7 @@ function pairFromHash() {
 }
 
 async function boot() {
+  forgetLegacyToken();
   const hash = pairFromHash();
   if (hash?.legacy) {
     const existing = await readSession();
@@ -209,18 +220,13 @@ async function boot() {
     notice("This app was paired with a different address. Pair this device again.");
   }
   wireEvents();
+  await consumeErrorLink();
   renderSession();
-  if (!state.session) {
-    if (new URLSearchParams(location.search).get("error") === "auth") {
-      setPairError("This device was disconnected. Pair again.");
-      history.replaceState(null, "", location.pathname);
-    }
-    return;
-  }
+  if (!state.session) return;
   await setupWorker();
   await loadPending();
-  refreshVapidFingerprint().catch(() => {});
-  refreshSubscription().catch(() => {});
+  await refreshVapidFingerprint().catch(() => {});
+  await refreshSubscription().catch(() => {});
 }
 
 async function pair(event) {
@@ -281,8 +287,16 @@ function render() {
   els.pending.append(fragment);
   const count = state.requests.length;
   els.count.textContent = count === 0 ? "No requests" : `${count} waiting`;
-  els.empty.hidden = count !== 0;
   const offline = state.servers.filter((server) => !server.ok && server.lastError !== "disabled");
+  if (count === 0) {
+    const allOffline = state.servers.length > 0 && offline.length === state.servers.length;
+    els.empty.hidden = false;
+    els.empty.textContent = allOffline
+      ? "No requests are waiting, but every server is offline. This may be out of date."
+      : "No requests are waiting. You are all caught up.";
+  } else {
+    els.empty.hidden = true;
+  }
   els.offline.hidden = offline.length === 0;
   els.offlineText.textContent = offline.length
     ? `Offline: ${offline.map((server) => server.label || server.id).join(", ")}. Showing the last known requests.`
@@ -366,6 +380,7 @@ async function reply(request, decision) {
     state.requests = state.requests.filter((item) => item.id !== request.id);
     setStatus("Answered.");
     render();
+    await loadPending();
   } catch (error) {
     if (error.status === 401) {
       await handleUnauthorized();
@@ -393,14 +408,26 @@ function updateCardBusy(id) {
 }
 
 async function handleUnauthorized() {
-  await clearSession();
-  state.session = null;
-  state.requests = [];
-  state.servers = [];
-  render();
-  renderSession();
-  setPairError("This device was disconnected. Pair again.");
-  setStatus("Device disconnected.");
+  if (state.unauthorizedHandling) return;
+  state.unauthorizedHandling = true;
+  try {
+    try {
+      const registration = state.registration ?? await setupWorker();
+      const subscription = await registration?.pushManager.getSubscription();
+      if (subscription) await subscription.unsubscribe().catch(() => {});
+    } catch {}
+    await clearSession();
+    state.session = null;
+    state.requests = [];
+    state.servers = [];
+    state.pushNeedsSetup = false;
+    render();
+    renderSession();
+    setPairError("This device was disconnected. Pair again.");
+    setStatus("Device disconnected.");
+  } finally {
+    state.unauthorizedHandling = false;
+  }
 }
 
 async function loadPending() {
@@ -427,29 +454,39 @@ async function loadPending() {
   }
 }
 
-function applyDeepLink() {
-  if (state.deepLinkHandled) return;
-  const params = new URLSearchParams(location.search);
-  const id = params.get("request");
-  if (id) {
-    state.focusId = id;
-    const card = els.pending.querySelector(`[data-request-id="${CSS.escape(id)}"]`);
-    if (!card) {
-      notice("Already answered or expired.");
-      state.deepLinkHandled = true;
-      history.replaceState(null, "", location.pathname);
-      return;
-    }
-    const heading = card.querySelector("h3");
-    heading?.focus();
-    card.scrollIntoView({ block: "center" });
-    state.deepLinkHandled = true;
-    history.replaceState(null, "", location.pathname);
-  }
-  const error = params.get("error");
-  if (error === "auth") handleUnauthorized();
+async function consumeErrorLink() {
+  if (state.errorHandled) return false;
+  const error = new URLSearchParams(location.search).get("error");
+  if (!error) return false;
+  state.errorHandled = true;
+  history.replaceState(null, "", location.pathname);
+  if (error === "auth") await handleUnauthorized();
   else if (error === "offline") notice("Could not reach the server. The request is still waiting.");
   else if (error === "answered") notice("Already answered or expired.");
+  return true;
+}
+
+function applyDeepLink() {
+  const params = new URLSearchParams(location.search);
+  const error = params.get("error");
+  void consumeErrorLink();
+  if (error === "auth") return;
+  if (state.deepLinkHandled) return;
+  const id = params.get("request");
+  if (!id) return;
+  state.focusId = id;
+  const card = els.pending.querySelector(`[data-request-id="${CSS.escape(id)}"]`);
+  if (!card) {
+    notice("Already answered or expired.");
+    state.deepLinkHandled = true;
+    history.replaceState(null, "", location.pathname);
+    return;
+  }
+  const heading = card.querySelector("h3");
+  heading?.focus();
+  card.scrollIntoView({ block: "center" });
+  state.deepLinkHandled = true;
+  history.replaceState(null, "", location.pathname);
 }
 
 function pushAvailable() {
@@ -497,15 +534,47 @@ async function currentKey() {
   return { ...result, bytes: base64UrlToBytes(result.publicKey) };
 }
 
-async function refreshVapidFingerprint() {
-  if (!pushAvailable()) return;
-  const key = await currentKey();
-  if (state.session.pushFingerprint && state.session.pushFingerprint !== key.fingerprint) {
-    els.pushStatus.textContent = "Notifications were set up for a different key. Enable them again.";
-    const registration = state.registration ?? await setupWorker();
-    const subscription = await registration?.pushManager.getSubscription();
-    await subscription?.unsubscribe();
+async function recoverPushKey(key) {
+  state.pushNeedsSetup = true;
+  els.pushStatus.textContent = "Notifications need to be set up again for this server.";
+  const registration = state.registration ?? await setupWorker();
+  const subscription = await registration?.pushManager.getSubscription();
+  if (subscription) await subscription.unsubscribe().catch(() => {});
+  state.session = { ...state.session, pushFingerprint: null, pushOrigin: null };
+  await writeSession(state.session);
+  if (!pushAvailable() || Notification.permission !== "granted") {
+    els.pushStatus.textContent = "Notifications need to be set up again. Enable them here.";
+    return false;
   }
+  try {
+    const fresh = await registration.pushManager.subscribe({
+      userVisibleOnly: true,
+      applicationServerKey: key.bytes,
+    });
+    await api("/api/subscribe", {
+      method: "POST",
+      body: JSON.stringify({ subscription: fresh.toJSON() }),
+    });
+    state.session = { ...state.session, pushFingerprint: key.fingerprint, pushOrigin: location.origin };
+    await writeSession(state.session);
+    state.pushNeedsSetup = false;
+    els.pushStatus.textContent = "Notifications are on for this device.";
+    return true;
+  } catch (error) {
+    if (error.status === 401) {
+      await handleUnauthorized();
+      return false;
+    }
+    els.pushStatus.textContent = "Notifications need to be set up again. Enable them here.";
+    return false;
+  }
+}
+
+async function refreshVapidFingerprint() {
+  if (!pushAvailable() || !state.session?.pushFingerprint) return;
+  const key = await currentKey();
+  if (state.session.pushFingerprint === key.fingerprint) return;
+  await recoverPushKey(key);
 }
 
 async function refreshSubscription() {
@@ -514,20 +583,27 @@ async function refreshSubscription() {
   if (!registration) return;
   const subscription = await registration.pushManager.getSubscription();
   if (!subscription) {
-    els.pushStatus.textContent = "Notifications are not enabled on this device.";
+    if (!state.pushNeedsSetup) els.pushStatus.textContent = "Notifications are not enabled on this device.";
     return;
   }
   const key = await currentKey();
   const existing = subscription.options?.applicationServerKey;
   if (existing && bytesToBase64Url(existing) !== key.publicKey) {
-    await subscription.unsubscribe();
-    els.pushStatus.textContent = "Notifications were set up for a different key. Enable them again.";
+    await recoverPushKey(key);
     return;
   }
-  await api("/api/subscribe", {
-    method: "POST",
-    body: JSON.stringify({ subscription: subscription.toJSON() }),
-  });
+  try {
+    await api("/api/subscribe", {
+      method: "POST",
+      body: JSON.stringify({ subscription: subscription.toJSON() }),
+    });
+  } catch (error) {
+    if (error.status === 401) {
+      await handleUnauthorized();
+      return;
+    }
+    throw error;
+  }
   if (state.session.pushFingerprint !== key.fingerprint || state.session.pushOrigin !== location.origin) {
     state.session = { ...state.session, pushFingerprint: key.fingerprint, pushOrigin: location.origin };
     await writeSession(state.session);
@@ -566,9 +642,14 @@ async function enableNotifications() {
     });
     state.session = { ...state.session, pushFingerprint: key.fingerprint, pushOrigin: location.origin };
     await writeSession(state.session);
+    state.pushNeedsSetup = false;
     els.pushStatus.textContent = "Notifications are on for this device.";
     setStatus("Notifications enabled.");
-  } catch {
+  } catch (error) {
+    if (error.status === 401) {
+      await handleUnauthorized();
+      return;
+    }
     els.pushStatus.textContent = "Notifications could not be enabled. Try again.";
   } finally {
     els.enable.disabled = false;
@@ -579,10 +660,15 @@ async function sendTest() {
   els.test.disabled = true;
   try {
     const result = await api("/api/test-notification", { method: "POST", body: "{}" });
-    if (result.sent > 0) els.pushStatus.textContent = "Test sent.";
-    else if (result.failed > 0) els.pushStatus.textContent = "Test failed. Check notifications for this app.";
-    else els.pushStatus.textContent = "No subscription is registered for this device.";
-  } catch {
+    const sent = Number(result?.sent) || 0;
+    const failed = Number(result?.failed) || 0;
+    const pruned = Number(result?.pruned) || 0;
+    els.pushStatus.textContent = `Test result: ${sent} sent, ${failed} failed, ${pruned} pruned.`;
+  } catch (error) {
+    if (error.status === 401) {
+      await handleUnauthorized();
+      return;
+    }
     els.pushStatus.textContent = "Test notification failed.";
   } finally {
     els.test.disabled = false;
@@ -595,11 +681,20 @@ async function unpair() {
     const registration = state.registration ?? await setupWorker();
     const subscription = await registration?.pushManager.getSubscription();
     if (subscription) {
-      await api("/api/unsubscribe", {
-        method: "POST",
-        body: JSON.stringify({ endpoint: subscription.endpoint }),
-      }).catch(() => {});
+      let unauthorized = false;
+      try {
+        await api("/api/unsubscribe", {
+          method: "POST",
+          body: JSON.stringify({ endpoint: subscription.endpoint }),
+        });
+      } catch (error) {
+        if (error.status === 401) unauthorized = true;
+      }
       await subscription.unsubscribe().catch(() => {});
+      if (unauthorized) {
+        await handleUnauthorized();
+        return;
+      }
     }
   } finally {
     await clearSession();
