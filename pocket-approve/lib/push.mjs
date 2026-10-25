@@ -17,14 +17,10 @@ function normalizeSubscription(subscription) {
   if (typeof endpoint !== "string" || endpoint.length === 0) {
     throw new TypeError("subscription.endpoint must be a non-empty string");
   }
-  let url;
   try {
-    url = new URL(endpoint);
+    new URL(endpoint);
   } catch {
     throw new TypeError("subscription.endpoint must be a valid URL");
-  }
-  if (url.protocol !== "https:" && url.protocol !== "http:") {
-    throw new TypeError("subscription.endpoint must be an http(s) URL");
   }
 
   const normalized = { endpoint };
@@ -58,6 +54,24 @@ function normalizeSubscription(subscription) {
   return normalized;
 }
 
+function validateSubscription(subscription) {
+  let url;
+  try {
+    url = new URL(subscription.endpoint);
+  } catch {
+    throw new TypeError("subscription.endpoint must be a valid URL");
+  }
+  if (url.protocol !== "https:") {
+    throw new TypeError("subscription.endpoint must be an https URL");
+  }
+  for (const name of ["p256dh", "auth"]) {
+    const value = subscription.keys?.[name];
+    if (typeof value !== "string" || value.length === 0) {
+      throw new TypeError(`subscription.keys.${name} must be a non-empty string`);
+    }
+  }
+}
+
 function mergeSubscription(existing, incoming) {
   const merged = { endpoint: incoming.endpoint };
   const keys = { ...(existing.keys ?? {}), ...(incoming.keys ?? {}) };
@@ -78,6 +92,15 @@ export function createPush({
   }
   if (typeof sendFn !== "function") {
     throw new TypeError("sendFn must be a function");
+  }
+  if (vapid !== null && vapid !== undefined) {
+    if (
+      !isObject(vapid) ||
+      typeof vapid.subject !== "string" ||
+      vapid.subject.trim().length === 0
+    ) {
+      throw new TypeError("vapid.subject must be a non-empty string");
+    }
   }
 
   const storePath = join(dataDir, STORE_NAME);
@@ -171,7 +194,17 @@ export function createPush({
         existing ? mergeSubscription(existing, subscription) : subscription,
       );
     }
-    subscriptions = [...loaded.values()];
+    subscriptions = [];
+    for (const subscription of loaded.values()) {
+      try {
+        validateSubscription(subscription);
+      } catch (error) {
+        throw new Error(
+          `Invalid subscription for ${subscription.endpoint} in ${storePath}: ${error.message}`,
+        );
+      }
+      subscriptions.push(subscription);
+    }
   }
 
   function init() {
@@ -195,10 +228,13 @@ export function createPush({
       (stored) => stored.endpoint === normalized.endpoint,
     );
     let stored = normalized;
+    if (index !== -1) {
+      stored = mergeSubscription(subscriptions[index], normalized);
+    }
+    validateSubscription(stored);
     if (index === -1) {
       subscriptions.push(stored);
     } else {
-      stored = mergeSubscription(subscriptions[index], normalized);
       subscriptions[index] = stored;
     }
     await persist();

@@ -30,6 +30,10 @@ function quietLog() {
   return { errors, log: { error: (...args) => errors.push(args) } };
 }
 
+function subscription(endpoint, keys = {}) {
+  return { endpoint, keys: { p256dh: "p256dh-key", auth: "auth-key", ...keys } };
+}
+
 test("dedupes subscriptions and prunes on 410", async (t) => {
   const dir = await tempDir(t);
   const sent = [];
@@ -44,8 +48,8 @@ test("dedupes subscriptions and prunes on 410", async (t) => {
     },
   });
   await push.init();
-  await push.add({ endpoint: "https://push/1" });
-  await push.add({ endpoint: "https://push/1" });
+  await push.add(subscription("https://push/1"));
+  await push.add(subscription("https://push/1"));
   assert.equal(push.list().length, 1);
   await push.send({ requestId: "per_1" });
   assert.equal(push.list().length, 0);
@@ -56,8 +60,8 @@ test("persists subscriptions across a reopen", async (t) => {
   const dir = await tempDir(t);
   const first = createPush({ dataDir: dir, vapid: vapid(), sendFn: async () => {} });
   await first.init();
-  await first.add({ endpoint: "https://push/1" });
-  await first.add({ endpoint: "https://push/2", keys: { p256dh: "p", auth: "a" } });
+  await first.add(subscription("https://push/1"));
+  await first.add(subscription("https://push/2", { p256dh: "p", auth: "a" }));
 
   const second = createPush({ dataDir: dir, vapid: vapid(), sendFn: async () => {} });
   await second.init();
@@ -79,7 +83,7 @@ test("writes subscriptions.json with mode 0600", async (t) => {
   const dir = await tempDir(t);
   const push = createPush({ dataDir: dir, vapid: vapid(), sendFn: async () => {} });
   await push.init();
-  await push.add({ endpoint: "https://push/1" });
+  await push.add(subscription("https://push/1"));
   const file = join(dir, "subscriptions.json");
   assert.equal((await stat(file)).mode & 0o777, 0o600);
   assert.ok(Array.isArray(JSON.parse(await readFile(file, "utf8"))));
@@ -88,7 +92,7 @@ test("writes subscriptions.json with mode 0600", async (t) => {
 test("tightens an existing store to mode 0600", async (t) => {
   const dir = await tempDir(t);
   const file = join(dir, "subscriptions.json");
-  await writeFile(file, JSON.stringify([{ endpoint: "https://push/1" }]), { mode: 0o644 });
+  await writeFile(file, JSON.stringify([subscription("https://push/1")]), { mode: 0o644 });
   const push = createPush({ dataDir: dir, vapid: vapid(), sendFn: async () => {} });
   await push.init();
   assert.equal((await stat(file)).mode & 0o777, 0o600);
@@ -98,8 +102,12 @@ test("duplicate add merges keys and invalid subscriptions are rejected", async (
   const dir = await tempDir(t);
   const push = createPush({ dataDir: dir, vapid: vapid(), sendFn: async () => {} });
   await push.init();
-  await push.add({ endpoint: "https://push/1", keys: { p256dh: "p", auth: "old" } });
+  await push.add(subscription("https://push/1", { p256dh: "p", auth: "old" }));
   await push.add({ endpoint: "https://push/1", keys: { auth: "new" } });
+  assert.equal(push.list().length, 1);
+  assert.deepEqual(push.list()[0].keys, { p256dh: "p", auth: "new" });
+
+  await push.add({ endpoint: "https://push/1" });
   assert.equal(push.list().length, 1);
   assert.deepEqual(push.list()[0].keys, { p256dh: "p", auth: "new" });
 
@@ -109,8 +117,12 @@ test("duplicate add merges keys and invalid subscriptions are rejected", async (
     { endpoint: "" },
     { endpoint: 42 },
     { endpoint: "not a url" },
+    { endpoint: "https://push/2" },
+    { endpoint: "http://push/2", keys: { p256dh: "p", auth: "a" } },
+    { endpoint: "https://push/2", keys: { auth: "a" } },
+    { endpoint: "https://push/2", keys: { p256dh: "p" } },
     { endpoint: "https://push/2", keys: "nope" },
-    { endpoint: "https://push/2", keys: { auth: 42 } },
+    { endpoint: "https://push/2", keys: { p256dh: "p", auth: 42 } },
   ]) {
     await assert.rejects(push.add(invalid), TypeError);
   }
@@ -123,8 +135,8 @@ test("send fans out the payload to every subscription", async (t) => {
   const { calls, sendFn } = recorder();
   const push = createPush({ dataDir: dir, vapid: details, sendFn });
   await push.init();
-  await push.add({ endpoint: "https://push/1" });
-  await push.add({ endpoint: "https://push/2" });
+  await push.add(subscription("https://push/1"));
+  await push.add(subscription("https://push/2"));
 
   const payload = { requestId: "per_1", title: "OpenCode", summary: "Allow bash?" };
   const result = await push.send(payload);
@@ -154,9 +166,9 @@ test("one failing endpoint does not block the rest", async (t) => {
   });
   const push = createPush({ dataDir: dir, vapid: vapid(), sendFn, log });
   await push.init();
-  await push.add({ endpoint: "https://push/1" });
-  await push.add({ endpoint: "https://push/2" });
-  await push.add({ endpoint: "https://push/3" });
+  await push.add(subscription("https://push/1"));
+  await push.add(subscription("https://push/2"));
+  await push.add(subscription("https://push/3"));
 
   const result = await push.send({ requestId: "per_1" });
 
@@ -199,7 +211,7 @@ test("send removes only 404 and 410 endpoints", async (t) => {
     "https://push/missing",
     "https://push/broken",
   ]) {
-    await push.add({ endpoint });
+    await push.add(subscription(endpoint));
   }
 
   const result = await push.send({ requestId: "per_1" });
@@ -220,8 +232,46 @@ test("init rejects a corrupt store", async (t) => {
   await assert.rejects(push.init(), /Invalid JSON/);
 });
 
+test("init rejects a stored subscription without keys", async (t) => {
+  const dir = await tempDir(t);
+  await writeFile(
+    join(dir, "subscriptions.json"),
+    JSON.stringify([{ endpoint: "https://push/1" }]),
+    { mode: 0o600 },
+  );
+  const push = createPush({ dataDir: dir, vapid: vapid(), sendFn: async () => {} });
+  await assert.rejects(push.init(), /p256dh/);
+});
+
 test("exposes the VAPID public key", async () => {
   const details = vapid();
   const push = createPush({ dataDir: "/tmp/unused", vapid: details, sendFn: async () => {} });
   assert.equal(push.publicKey, details.publicKey);
+});
+
+test("requires a VAPID subject when VAPID is configured", () => {
+  const details = vapid();
+  for (const vapidConfig of [
+    { publicKey: details.publicKey, privateKey: details.privateKey },
+    { subject: "", publicKey: details.publicKey, privateKey: details.privateKey },
+    { subject: "   ", publicKey: details.publicKey, privateKey: details.privateKey },
+    "mailto:a@b.c",
+  ]) {
+    assert.throws(
+      () =>
+        createPush({
+          dataDir: "/tmp/unused",
+          vapid: vapidConfig,
+          sendFn: async () => {},
+        }),
+      TypeError,
+    );
+  }
+
+  const unconfigured = createPush({
+    dataDir: "/tmp/unused",
+    vapid: null,
+    sendFn: async () => {},
+  });
+  assert.equal(unconfigured.publicKey, null);
 });
