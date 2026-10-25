@@ -121,6 +121,16 @@ test("adapter tolerates missing patterns and metadata", async () => {
   ]);
 });
 
+test("adapter normalize tolerates null and ignores array metadata", async () => {
+  const { normalize } = await import("../lib/adapters/opencode.mjs");
+  const nulled = normalize(null);
+  assert.equal(nulled.id, undefined);
+  assert.deepEqual(nulled.patterns, []);
+  assert.deepEqual(nulled.metadata, {});
+  assert.deepEqual(normalize({ metadata: [] }).metadata, {});
+  assert.deepEqual(normalize({ metadata: { command: "x" } }).metadata, { command: "x" });
+});
+
 test("adapter preserves always and tool when OpenCode sends them", async () => {
   const { createOpenCodeSource } = await import("../lib/adapters/opencode.mjs");
   const source = createOpenCodeSource({

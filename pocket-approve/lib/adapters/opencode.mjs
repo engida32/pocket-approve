@@ -1,15 +1,21 @@
 import { summarize, titleFor } from "../summarize.mjs";
 
 export function normalize(raw = {}) {
+  const source = raw ?? {};
   const request = {
-    id: raw.id,
-    sessionID: raw.sessionID,
-    permission: raw.permission,
-    patterns: Array.isArray(raw.patterns) ? raw.patterns : [],
-    metadata: raw.metadata && typeof raw.metadata === "object" ? raw.metadata : {},
+    id: source.id,
+    sessionID: source.sessionID,
+    permission: source.permission,
+    patterns: Array.isArray(source.patterns) ? source.patterns : [],
+    metadata:
+      source.metadata &&
+      typeof source.metadata === "object" &&
+      !Array.isArray(source.metadata)
+        ? source.metadata
+        : {},
   };
-  if (Array.isArray(raw.always)) request.always = raw.always;
-  if (typeof raw.tool === "string") request.tool = raw.tool;
+  if (Array.isArray(source.always)) request.always = source.always;
+  if (typeof source.tool === "string") request.tool = source.tool;
   return request;
 }
 
