@@ -132,6 +132,22 @@ test("a restart does not resurrect an old poller or cache", async (t) => {
   await second.stop();
 });
 
+test("the legacy token is accepted only for LAN migration, never by default", async (t) => {
+  const dataDir = await mkdtemp(join(tmpdir(), "pa-int-"));
+  t.after(() => rm(dataDir, { recursive: true, force: true }));
+  const devices = createDeviceStore({ dataDir });
+  await devices.init();
+  const legacyRequest = { headers: { authorization: "Bearer legacy-token" } };
+  const legacy = createAuthenticator({ devices, allowLegacyToken: true, legacyToken: "legacy-token" });
+  assert.deepEqual(await legacy.authenticate(legacyRequest), { legacy: true });
+  const strict = createAuthenticator({ devices });
+  assert.equal(await strict.authenticate(legacyRequest), null);
+  const created = await devices.create("Phone");
+  const result = await legacy.authenticate({ headers: { authorization: `Bearer ${created.token}` } });
+  assert.equal(result.device.id, created.device.id);
+  assert.equal(result.legacy, undefined);
+});
+
 function end(res, value, status = 200) {
   res.writeHead(status, { "content-type": "application/json" });
   res.end(JSON.stringify(value));
