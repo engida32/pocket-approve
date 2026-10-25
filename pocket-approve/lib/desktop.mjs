@@ -5,6 +5,7 @@ const APP_NAME = "Pocket Approve";
 const REPLACES_ID = "0";
 const ICON = "";
 const ACTIONS = "['once', 'Allow once', 'reject', 'Deny', 'always', 'Allow always']";
+const NO_ACTIONS = "[]";
 const HINTS = "{'urgency': <byte 2>}";
 const TIMEOUT = "0";
 const DECISIONS = new Set(["once", "always", "reject"]);
@@ -68,7 +69,7 @@ export function buildNotifyArgs(request = {}) {
     ICON,
     gvariantString(request.title ?? ""),
     gvariantString(escapeMarkup(request.summary ?? "")),
-    ACTIONS,
+    request.actions === false ? NO_ACTIONS : ACTIONS,
     HINTS,
     TIMEOUT,
   ];
