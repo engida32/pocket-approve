@@ -9,7 +9,7 @@
   },
   "scripts": {
     "start": "node server.mjs",
-    "setup": "node scripts/setup.mjs",
+    "setup": "node scripts/setup-v2.mjs",
     "test": "node --test test/*.test.mjs",
     "pair": "node scripts/admin.mjs pair",
     "devices": "node scripts/admin.mjs devices",
