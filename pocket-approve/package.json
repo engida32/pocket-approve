@@ -10,7 +10,11 @@
   "scripts": {
     "start": "node server.mjs",
     "setup": "node scripts/setup.mjs",
-    "test": "node --test test/*.test.mjs"
+    "test": "node --test test/*.test.mjs",
+    "pair": "node scripts/admin.mjs pair",
+    "devices": "node scripts/admin.mjs devices",
+    "revoke": "node scripts/admin.mjs revoke",
+    "doctor": "node scripts/admin.mjs doctor"
   },
   "dependencies": {
     "qrcode-terminal": "0.12.0",
