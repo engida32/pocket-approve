@@ -277,6 +277,7 @@ export function createNdjsonParser(onEvent) {
 
 function retryAfterMs(response) {
   const value = response?.headers?.get?.("Retry-After");
+  if (value === null || value === undefined) return null;
   const seconds = Number(value);
   return Number.isFinite(seconds) && seconds >= 0 ? Math.min(seconds * 1000, 30000) : null;
 }
@@ -295,6 +296,7 @@ export function createNtfy({
   log = console,
   sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
   now = () => Date.now(),
+  stallMs = 90000,
 } = {}) {
   if (!settings) throw new TypeError("settings is required");
   if (typeof dataDir !== "string" || dataDir === "") throw new TypeError("dataDir is required");
@@ -309,6 +311,7 @@ export function createNtfy({
   let buffer = "";
   const seenEvents = new Set();
   const tests = new Map();
+  const testIds = new Set();
 
   function enqueue(operation) {
     const result = queue.then(operation);
@@ -379,7 +382,8 @@ export function createNtfy({
   }
 
   async function handleReply(reply) {
-    if (reply.id.startsWith("test:")) {
+    if (testIds.has(reply.id)) {
+      testIds.delete(reply.id);
       audit.append("test_notification", {
         deviceId: "ntfy",
         requestId: reply.id,
@@ -446,7 +450,7 @@ export function createNtfy({
     let watchdog = null;
     const touch = () => {
       if (watchdog) clearTimeout(watchdog);
-      watchdog = setTimeout(() => controller?.abort(), 90000);
+      watchdog = setTimeout(() => controller?.abort(), stallMs);
     };
     touch();
     try {
@@ -470,7 +474,7 @@ export function createNtfy({
         await streamOnce();
         attempt = 0;
       } catch (error) {
-        if (stopped || error.name === "AbortError") break;
+        if (stopped) break;
         const base = Math.min(60000, 1000 * 2 ** attempt);
         attempt += 1;
         const wait = error.retryAfter ?? Math.round(base / 2 + Math.random() * (base / 2));
@@ -501,18 +505,27 @@ export function createNtfy({
     publishNotice,
     async sendTest() {
       const id = `test:${randomBytes(16).toString("hex")}`;
-      await publish(buildTestMessage(settings, id));
+      testIds.add(id);
+      try {
+        await publish(buildTestMessage(settings, id));
+      } catch (error) {
+        testIds.delete(id);
+        throw error;
+      }
       return { id };
     },
     waitForTest(id, timeoutMs = 120000) {
+      testIds.add(id);
       return new Promise((resolve, reject) => {
         const timer = setTimeout(() => {
           tests.delete(id);
+          testIds.delete(id);
           reject(new Error("timed out waiting for test reply"));
         }, timeoutMs);
         tests.set(id, {
           resolve: () => {
             clearTimeout(timer);
+            testIds.delete(id);
             resolve();
           },
         });

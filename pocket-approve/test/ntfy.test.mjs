@@ -376,3 +376,124 @@ test("createNtfy resolves a test reply without calling fleet.reply", async () =>
   await ntfy.stop();
   assert.equal(audits[0].action, "test_notification");
 });
+
+function stallingResponse(init) {
+  return {
+    ok: true,
+    status: 200,
+    headers: new Headers(),
+    body: new ReadableStream({
+      start(controller) {
+        init.signal.addEventListener("abort", () => {
+          controller.error(new DOMException("Aborted", "AbortError"));
+        });
+      },
+    }),
+  };
+}
+
+test("createNtfy routes an unregistered test-prefixed id to fleet.reply", async () => {
+  const dir = await tempDir();
+  const settings = createSettings();
+  const id = "test:req_1";
+  const sig = signReply(settings.secret, id, "once");
+  const event = JSON.stringify({
+    id: "evt_real_test",
+    time: 1793000000,
+    event: "message",
+    message: JSON.stringify({ id, decision: "once", sig }),
+  });
+  const replies = [];
+  const audits = [];
+  const ntfy = createNtfy({
+    settings,
+    dataDir: dir,
+    audit: { append: (action, fields) => audits.push({ action, fields }) },
+    fleet: { reply: async (...args) => { replies.push(args); return { status: 200 }; } },
+    fetchImpl: fakeFetch([{ ok: true, status: 200, body: streamOf([event]) }], []),
+    sleep: async () => {},
+    log: { error() {} },
+  });
+  await ntfy.start();
+  await new Promise((resolve) => setTimeout(resolve, 30));
+  await ntfy.stop();
+  assert.deepEqual(replies, [[id, "once"]]);
+  assert.equal(audits[0].action, "reply");
+  assert.equal(audits[0].fields.serverId, "test");
+});
+
+test("createNtfy uses fallback delays when Retry-After is absent", async () => {
+  const dir = await tempDir();
+  const calls = [];
+  const waits = [];
+  const ntfy = createNtfy({
+    settings: createSettings(),
+    dataDir: dir,
+    audit: { append() {} },
+    fleet: { reply: async () => ({ status: 200 }) },
+    fetchImpl: fakeFetch([
+      { ok: false, status: 503, headers: new Headers() },
+      { ok: false, status: 503, headers: new Headers() },
+      { ok: true, status: 200, headers: new Headers() },
+    ], calls),
+    sleep: async (ms) => waits.push(ms),
+    log: { error() {} },
+  });
+  await ntfy.publishRequest(item);
+  assert.equal(calls.length, 3);
+  assert.deepEqual(waits, [250, 1000]);
+});
+
+test("createNtfy backs off after a stream error without Retry-After", async () => {
+  const dir = await tempDir();
+  const calls = [];
+  const waits = [];
+  const ntfy = createNtfy({
+    settings: createSettings(),
+    dataDir: dir,
+    audit: { append() {} },
+    fleet: { reply: async () => ({ status: 200 }) },
+    fetchImpl: fakeFetch([
+      { ok: false, status: 503, headers: new Headers() },
+      (url, init) => stallingResponse(init),
+    ], calls),
+    sleep: async (ms) => waits.push(ms),
+    stallMs: 20,
+    log: { error() {} },
+  });
+  await ntfy.start();
+  await new Promise((resolve) => setTimeout(resolve, 30));
+  await ntfy.stop();
+  assert.ok(calls.length >= 2);
+  assert.ok(waits.length >= 1);
+  assert.ok(waits[0] > 0, `expected jittered backoff, got ${waits[0]}`);
+  assert.ok(waits[0] <= 1000);
+});
+
+test("createNtfy reconnects after a stalled stream aborts", async () => {
+  const dir = await tempDir();
+  const calls = [];
+  const waits = [];
+  const ntfy = createNtfy({
+    settings: createSettings(),
+    dataDir: dir,
+    audit: { append() {} },
+    fleet: { reply: async () => ({ status: 200 }) },
+    fetchImpl: fakeFetch([
+      (url, init) => stallingResponse(init),
+      (url, init) => stallingResponse(init),
+    ], calls),
+    sleep: async (ms) => waits.push(ms),
+    stallMs: 20,
+    log: { error() {} },
+  });
+  const deadline = Date.now() + 1000;
+  await ntfy.start();
+  while (calls.length < 2 && Date.now() < deadline) {
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+  await ntfy.stop();
+  assert.ok(calls.length >= 2, `expected reconnect after a stall, got ${calls.length} calls`);
+  assert.ok(waits.length >= 1);
+  assert.ok(waits[0] > 0 && waits[0] <= 1000);
+});
