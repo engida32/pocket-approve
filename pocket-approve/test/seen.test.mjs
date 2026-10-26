@@ -201,3 +201,14 @@ test("release removes records so a later takeNew returns the item again", async 
   await seen.release(["alpha:1"]);
   assert.deepEqual(await seen.takeNew([item]), [item]);
 });
+
+test("takeNew collects at most the limit and leaves the rest for a later call", async (t) => {
+  const seen = createSeenStore({ dataDir: await dir(t), now: () => 0 });
+  await seen.init();
+  const items = Array.from({ length: 25 }, (_, index) => ({ id: `srv:${index}` }));
+  const first = await seen.takeNew(items, 20);
+  assert.equal(first.length, 20);
+  assert.equal(seen.has("srv:20"), false);
+  const second = await seen.takeNew(items, 20);
+  assert.deepEqual(second.map((item) => item.id), ["srv:20", "srv:21", "srv:22", "srv:23", "srv:24"]);
+});

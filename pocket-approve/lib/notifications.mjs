@@ -117,11 +117,11 @@ export function createNotifications({
     return pushes;
   }
 
-  function notifyDesktop(item, title, summary, extra = {}) {
+  function notifyDesktop(item, title, summary) {
     if (typeof desktop?.notify !== "function") return false;
     let pending;
     try {
-      pending = desktop.notify({ id: item.id, title, summary, ...extra });
+      pending = desktop.notify({ id: item.id, title, summary });
     } catch (error) {
       logError(`notifications: desktop failed for ${item.id}`, error);
       return true;
@@ -146,37 +146,20 @@ export function createNotifications({
   }
 
   async function announce(link) {
-    const { requests } = await fleet.pending();
-    const totalPending = requests.length;
-    const activeIds = new Set(requests.map((item) => item.id));
+    const snapshot = fleet.pending();
+    const totalPending = snapshot.requests.length;
+    const activeIds = new Set(snapshot.requests.map((item) => item.id));
     await seen.observe(activeIds);
-    const mine = requests.filter((item) => item.serverId === link?.id);
-    const candidates = ntfy ? mine.slice(0, NTFY_BATCH) : mine;
-    const fresh = await seen.takeNew(candidates);
-    if (fresh.length === 0) return { desktop: 0, pushes: 0, digest: false, ntfy: 0 };
+    const mine = snapshot.requests.filter((item) => item.serverId === link?.id);
 
-    if (!ntfy && digest && fresh.length > DIGEST_THRESHOLD) {
-      const payload = shrink(digestPayload(fresh[0].serverLabel, fresh.length, totalPending));
-      let pushes = 0;
-      if (fits(payload)) pushes = await pushToDevices(payload);
-      else log.warn?.("digest payload is too large to push");
-      const desktopAttempt = await notifyDesktop(
-        { id: payload.id, serverId: link?.id, serverLabel: fresh[0].serverLabel },
-        payload.title,
-        payload.summary,
-        { actions: false },
-      );
-      return { desktop: desktopAttempt ? 1 : 0, pushes, digest: true, ntfy: 0 };
-    }
-
-    let desktopCount = 0;
-    let pushCount = 0;
-    let ntfyCount = 0;
-    for (const item of fresh) {
-      const title = desktopTitle(item);
-      if (await notifyDesktop(item, title, item.summary)) desktopCount += 1;
-
-      if (ntfy) {
+    if (ntfy) {
+      const fresh = await seen.takeNew(mine, NTFY_BATCH);
+      if (fresh.length === 0) return { desktop: 0, pushes: 0, digest: false, ntfy: 0 };
+      let desktopCount = 0;
+      let ntfyCount = 0;
+      for (const item of fresh) {
+        const title = desktopTitle(item);
+        if (await notifyDesktop(item, title, item.summary)) desktopCount += 1;
         try {
           await ntfy.publishRequest(item, { count: totalPending });
           ntfyCount += 1;
@@ -184,41 +167,96 @@ export function createNotifications({
           log.error?.(`ntfy publish failed for ${item.id}: ${error.message}`);
           await seen.release([item.id]);
         }
+      }
+      return { desktop: desktopCount, pushes: 0, digest: false, ntfy: ntfyCount };
+    }
+
+    const fresh = await seen.takeNew(mine);
+    if (fresh.length === 0) return { desktop: 0, pushes: 0, digest: false };
+
+    const label = link?.label ?? fresh[0]?.serverLabel ?? "";
+
+    if (fresh.length > DIGEST_THRESHOLD) {
+      const payload = shrink(digestPayload(label, fresh.length, totalPending));
+      let pushes = 0;
+      if (!fits(payload)) {
+        logError("notifications: digest payload exceeds the body limit; skipping push");
       } else {
-        const payload = shrink(requestPayload(item, totalPending));
-        if (!fits(payload)) {
-          log.warn?.(`notification payload is too large for ${item.id}`);
-          continue;
+        try {
+          pushes = await pushToDevices(payload);
+        } catch (error) {
+          logError("notifications: digest push failed", error);
         }
-        pushCount += await pushToDevices(payload);
+      }
+      let notes = 0;
+      if (typeof desktop?.notify === "function") {
+        try {
+          const pending = desktop.notify({
+            id: payload.id,
+            title: payload.title,
+            summary: payload.summary,
+            actions: false,
+          });
+          notes = 1;
+          Promise.resolve(pending).catch((error) =>
+            logError("notifications: digest desktop failed", error),
+          );
+        } catch (error) {
+          logError("notifications: digest desktop failed", error);
+        }
+      }
+      return { desktop: notes, pushes, digest: true };
+    }
+
+    let notes = 0;
+    let pushes = 0;
+    for (const item of fresh) {
+      const payload = shrink(requestPayload(item, totalPending));
+      if (notifyDesktop(item, desktopTitle(item), payload.summary)) notes += 1;
+      if (!fits(payload)) {
+        logError(`notifications: payload for ${item.id} exceeds the body limit; skipping push`);
+        continue;
+      }
+      try {
+        pushes += await pushToDevices(payload);
+      } catch (error) {
+        logError(`notifications: push failed for ${item.id}`, error);
       }
     }
-    return { desktop: desktopCount, pushes: pushCount, digest: false, ntfy: ntfyCount };
+    return { desktop: notes, pushes, digest: false };
   }
 
   async function sendTest(deviceId = null) {
     if (ntfy) {
       try {
         const { id } = await ntfy.sendTest();
-        audit.append("test_notification", { deviceId: "ntfy", requestId: id, result: "sent" });
+        await audit?.append("test_notification", { deviceId: "ntfy", requestId: id, result: "sent" });
         return { sent: 1, failed: 0, pruned: 0, id };
       } catch (error) {
-        audit.append("test_notification", { deviceId: "ntfy", result: "failed" });
+        await audit?.append("test_notification", { deviceId: "ntfy", result: "failed" });
         return { sent: 0, failed: 1, pruned: 0 };
       }
     }
-    const payload = {
-      id: `test:${randomUUID()}`,
+    const id = `test:${randomUUID()}`;
+    const payload = shrink({
+      id,
+      serverId: null,
+      serverLabel: "Pocket Approve",
       title: "Test notification",
       summary: "If you can read this, push is working.",
-      count: 0,
+      count: fleet.pending().requests.length,
       kind: "test",
-    };
-    if (!fits(payload)) throw new Error("test notification is too large");
-    const result = await push.send(payload, { deviceId: deviceId ?? null, options: optionsFor(payload) });
-    audit.append("test_notification", {
-      deviceId,
-      requestId: payload.id,
+    });
+    if (!fits(payload)) {
+      logError("notifications: test payload exceeds the body limit; skipping push");
+      return { sent: 0, failed: 0, pruned: 0 };
+    }
+    const result = await push.send(payload, {
+      deviceId: deviceId ?? null,
+      options: optionsFor(payload),
+    });
+    await audit?.append("test_notification", {
+      deviceId: deviceId ?? undefined,
       result: `${result.sent}/${result.failed}`,
     });
     return { sent: result.sent, failed: result.failed, pruned: result.removed };

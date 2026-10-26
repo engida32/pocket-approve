@@ -69,7 +69,8 @@ export function createSeenStore({
 
   const init = () => enqueue(load);
 
-  async function takeNew(items) {
+  async function takeNew(items, limit) {
+    const cap = typeof limit === "number" && Number.isFinite(limit) && limit >= 0 ? Math.floor(limit) : Infinity;
     return enqueue(async () => {
       if (!initialized) await load();
       if (!Array.isArray(items)) return [];
@@ -81,6 +82,7 @@ export function createSeenStore({
         if (Object.hasOwn(next, item.id)) continue;
         next[item.id] = { firstSeenAt: at, lastPresentAt: at };
         fresh.push(item);
+        if (fresh.length >= cap) break;
       }
       if (fresh.length === 0) return [];
       await writePrivateJson(file, next);
@@ -102,8 +104,8 @@ export function createSeenStore({
         }
       }
       if (!changed) return;
+      await writePrivateJson(file, next);
       records = next;
-      await writePrivateJson(file, records);
     });
   }
 

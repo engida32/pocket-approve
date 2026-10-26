@@ -32,7 +32,12 @@ function harness(items) {
       reply: async (id, decision) => { replies.push({ id, decision }); return { status: 200 }; },
     },
     seen: {
-      takeNew: async (fresh) => fresh.filter((item) => !seen.has(item.id) && seen.set(item.id, 1)),
+      takeNew: async (items, limit) => {
+        const cap = typeof limit === "number" && Number.isFinite(limit) && limit >= 0 ? Math.floor(limit) : Infinity;
+        const fresh = items.filter((item) => !seen.has(item.id)).slice(0, cap);
+        for (const item of fresh) seen.set(item.id, 1);
+        return fresh;
+      },
       observe: async () => {},
     },
     push: {
@@ -311,4 +316,63 @@ test("sendTest uses ntfy when configured", async () => {
     digest: false,
   });
   assert.deepEqual(await notifications.sendTest(), { sent: 1, failed: 0, pruned: 0, id: "test:1" });
+});
+
+test("ntfy mode publishes the overflow on the next poll", async () => {
+  const items = Array.from({ length: 25 }, (_, index) => request(String(index)));
+  const published = [];
+  const harnessState = harness([...items]);
+  const notifications = createNotifications({
+    fleet: harnessState.fleet,
+    seen: harnessState.seen,
+    desktop: harnessState.desktop,
+    audit: harnessState.audit,
+    ntfy: { publishRequest: async (item) => published.push(item.id), sendTest: async () => ({ id: "test:1" }) },
+    digest: false,
+  });
+  const first = await notifications.announce({ id: "alpha" });
+  await flush();
+  assert.equal(first.ntfy, 20);
+  assert.equal(published.length, 20);
+  const second = await notifications.announce({ id: "alpha" });
+  await flush();
+  assert.equal(second.ntfy, 5);
+  assert.equal(published.length, 25);
+  assert.deepEqual(published.slice(20), ["alpha:20", "alpha:21", "alpha:22", "alpha:23", "alpha:24"]);
+});
+
+test("a failed web push does not stop the rest of the poll", async () => {
+  const harnessState = harness([request("1"), request("2"), request("3")]);
+  const attempts = [];
+  harnessState.dependencies.push.send = async (payload) => {
+    attempts.push(payload.id);
+    if (payload.id === "alpha:2") throw new Error("push offline");
+    return { sent: 1, failed: 0, removed: 0 };
+  };
+  harnessState.dependencies.log = { error() {} };
+  const notifications = createNotifications(harnessState.dependencies);
+  const result = await notifications.announce({ id: "alpha" });
+  assert.deepEqual(attempts, ["alpha:1", "alpha:2", "alpha:3"]);
+  assert.equal(result.pushes, 2);
+  assert.equal(result.desktop, 3);
+});
+
+test("ntfy sendTest failure audits the ntfy device", async () => {
+  const audits = [];
+  const harnessState = harness([]);
+  const notifications = createNotifications({
+    fleet: harnessState.fleet,
+    seen: harnessState.seen,
+    desktop: harnessState.desktop,
+    audit: { append: async (event, detail) => audits.push({ event, detail }) },
+    ntfy: {
+      publishRequest: async () => {},
+      sendTest: async () => { throw new Error("offline"); },
+    },
+    digest: false,
+  });
+  assert.deepEqual(await notifications.sendTest(), { sent: 0, failed: 1, pruned: 0 });
+  assert.deepEqual(audits, [
+    { event: "test_notification", detail: { deviceId: "ntfy", result: "failed" } },
+  ]);
 });
