@@ -52,6 +52,7 @@ export function createNtfyRuntime({
     log,
     fetchImpl,
     now,
+    onReply: (id) => desktopPort.close(id),
   });
   notifications = makeNotifications({
     fleet,

@@ -1,15 +1,41 @@
 {
   "name": "pocket-approve",
   "version": "0.1.0",
-  "private": true,
   "description": "Phone and desktop approvals for OpenCode permission prompts",
+  "license": "MIT",
+  "author": "Pocket Approve contributors",
   "type": "module",
   "engines": {
     "node": ">=20"
   },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/engida32/pocket-approve.git"
+  },
+  "bugs": {
+    "url": "https://github.com/engida32/pocket-approve/issues"
+  },
+  "homepage": "https://github.com/engida32/pocket-approve#readme",
+  "keywords": [
+    "opencode",
+    "approval",
+    "notifications",
+    "ntfy",
+    "web-push",
+    "security"
+  ],
+  "files": [
+    "lib/",
+    "public/",
+    "scripts/",
+    "server.mjs",
+    "README.md",
+    "LICENSE"
+  ],
   "scripts": {
     "start": "node server.mjs",
     "setup": "node scripts/setup-v2.mjs",
+    "phone": "node scripts/phone.mjs",
     "connect": "node scripts/ntfy.mjs",
     "disconnect": "node scripts/ntfy.mjs --disconnect",
     "ntfy": "node scripts/ntfy.mjs",

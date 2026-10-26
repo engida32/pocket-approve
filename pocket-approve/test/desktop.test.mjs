@@ -120,7 +120,7 @@ test("buildCloseArgs closes the notification by id", () => {
     "/org/freedesktop/Notifications",
     "--method",
     "org.freedesktop.Notifications.CloseNotification",
-    "39",
+    "uint32 39",
   ]);
 });
 
@@ -170,6 +170,13 @@ test("action resolves the request, fires onAction, and close dismisses it", asyn
   assert.equal(actions.length, 1);
   assert.equal(actions[0].requestId, "per_1");
   assert.equal(actions[0].decision, "once");
+  assert.ok(
+    children.some(
+      (child) =>
+        child.args.includes("org.freedesktop.Notifications.CloseNotification") &&
+        child.args.at(-1) === "uint32 7",
+    ),
+  );
 
   const second = desktop.notify({ id: "per_2", title: "Bash: touch y", summary: "touch y" });
   await new Promise((resolve) => setTimeout(resolve, 0));
@@ -180,7 +187,7 @@ test("action resolves the request, fires onAction, and close dismisses it", asyn
     children.some(
       (child) =>
         child.args.includes("org.freedesktop.Notifications.CloseNotification") &&
-        child.args.at(-1) === "7",
+        child.args.at(-1) === "uint32 7",
     ),
   );
 

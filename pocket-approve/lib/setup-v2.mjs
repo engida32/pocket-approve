@@ -114,7 +114,6 @@ export function buildSetupConfig({ options, previous = null, env = process.env, 
   }
   const base = {
     mode: options.mode,
-    trustProxy: true,
     allowInsecureUpstream: false,
     pollIntervalMs: previous?.pollIntervalMs ?? 3000,
     servers,

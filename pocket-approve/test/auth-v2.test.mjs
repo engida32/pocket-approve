@@ -52,6 +52,16 @@ test("rate limits return a retry delay and reset after the window", () => {
   assert.equal(limiter.take("a", 2, 60_000), 0);
 });
 
+test("sweeps expired buckets once the map grows", () => {
+  let clock = 0;
+  const limiter = createRateLimiter({ now: () => clock });
+  for (let i = 0; i < 1100; i += 1) limiter.take(`k${i}`, 1, 1000);
+  assert.equal(limiter.size(), 1100);
+  clock = 2000;
+  assert.equal(limiter.take("fresh", 1, 1000), 0);
+  assert.equal(limiter.size(), 1);
+});
+
 test("lan origin prefers the normalized publicOrigin over naive construction", () => {
   const config = {
     mode: "lan",

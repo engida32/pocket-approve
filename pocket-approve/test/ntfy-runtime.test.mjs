@@ -9,11 +9,13 @@ import {
 
 test("createNtfyRuntime wires only the browserless dependencies", async () => {
   const events = [];
+  const closed = [];
+  let ntfyConfig;
   const notifications = { announce: async (link) => events.push(["announce", link.id]) };
   const deps = {
     createAuditLog: () => ({ append() {} }),
     createSeenStore: () => ({ init: async () => events.push(["seen.init"]), observe: async () => {}, takeNew: async () => [], release: async () => {} }),
-    createDesktop: () => ({ notify: async () => null, stop: () => events.push(["desktop.stop"]) }),
+    createDesktop: () => ({ notify: async () => null, close: (id) => closed.push(id), stop: () => events.push(["desktop.stop"]) }),
     createFleet: ({ onChange }) => ({
       init: async () => events.push(["fleet.init"]),
       start: async () => events.push(["fleet.start"]),
@@ -22,7 +24,10 @@ test("createNtfyRuntime wires only the browserless dependencies", async () => {
       reply: async () => ({ status: 200 }),
       emit: onChange,
     }),
-    createNtfy: () => ({ start: async () => events.push(["ntfy.start"]), stop: async () => events.push(["ntfy.stop"]) }),
+    createNtfy: (config) => {
+      ntfyConfig = config;
+      return { start: async () => events.push(["ntfy.start"]), stop: async () => events.push(["ntfy.stop"]) };
+    },
     createNotifications: () => notifications,
   };
   const runtime = createNtfyRuntime({
@@ -45,6 +50,8 @@ test("createNtfyRuntime wires only the browserless dependencies", async () => {
     ["fleet.stop"],
     ["desktop.stop"],
   ]);
+  ntfyConfig.onReply("alpha:req_1", 200, "once");
+  assert.deepEqual(closed, ["alpha:req_1"]);
 });
 
 import { spawnSync } from "node:child_process";

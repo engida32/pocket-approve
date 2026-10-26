@@ -349,6 +349,34 @@ test("createNtfy ignores a forged reply and never calls fleet.reply", async () =
   assert.equal(settings.lastEventId, "evt_bad");
 });
 
+test("createNtfy dismisses the matching desktop card when the phone replies", async () => {
+  const dir = await tempDir();
+  const settings = createSettings();
+  const id = "alpha:req_1";
+  const sig = signReply(settings.secret, id, "once");
+  const event = JSON.stringify({
+    id: "evt_1",
+    time: 1793000000,
+    event: "message",
+    message: JSON.stringify({ id, decision: "once", sig }),
+  });
+  const closed = [];
+  const ntfy = createNtfy({
+    settings,
+    dataDir: dir,
+    audit: { append() {} },
+    fleet: { reply: async () => ({ status: 200 }) },
+    fetchImpl: fakeFetch([{ ok: true, status: 200, body: streamOf([event, event]) }], []),
+    sleep: async () => {},
+    log: { error() {} },
+    onReply: (...args) => closed.push(args),
+  });
+  await ntfy.start();
+  await new Promise((resolve) => setTimeout(resolve, 30));
+  await ntfy.stop();
+  assert.deepEqual(closed, [[id, 200, "once"]]);
+});
+
 test("createNtfy resolves a test reply without calling fleet.reply", async () => {
   const dir = await tempDir();
   const settings = createSettings();
@@ -361,6 +389,7 @@ test("createNtfy resolves a test reply without calling fleet.reply", async () =>
     message: JSON.stringify({ id, decision: "once", sig }),
   });
   const audits = [];
+  const closed = [];
   const ntfy = createNtfy({
     settings,
     dataDir: dir,
@@ -369,12 +398,14 @@ test("createNtfy resolves a test reply without calling fleet.reply", async () =>
     fetchImpl: fakeFetch([{ ok: true, status: 200, body: streamOf([event]) }], []),
     sleep: async () => {},
     log: { error() {} },
+    onReply: (...args) => closed.push(args),
   });
   const waiting = ntfy.waitForTest(id, 1000);
   await ntfy.start();
   await waiting;
   await ntfy.stop();
   assert.equal(audits[0].action, "test_notification");
+  assert.deepEqual(closed, []);
 });
 
 test("createNtfy keeps a replied test ID isolated on a second delivery", async () => {

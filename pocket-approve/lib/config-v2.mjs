@@ -4,6 +4,7 @@ import { join, resolve } from "node:path";
 import { DATA_DIR } from "./config.mjs";
 
 export const SCHEMA_VERSION = 2;
+export const MAX_SERVERS = 50;
 export const SERVER_ID = /^[a-z0-9][a-z0-9_-]{0,31}$/;
 const LOOPBACK = new Set(["127.0.0.1", "::1", "localhost"]);
 
@@ -183,7 +184,9 @@ export function normalizeConfig(raw = {}) {
     throw new Error("server ids must be unique");
   }
   if (servers.length < 1) throw new Error("config requires at least one server");
-  if (servers.length > 20) throw new Error("config requires at most 20 servers");
+  if (servers.length > MAX_SERVERS) {
+    throw new Error(`config requires at most ${MAX_SERVERS} servers`);
+  }
   if (!servers.some((server) => server.enabled)) {
     throw new Error("config requires at least one server to be enabled");
   }
@@ -193,16 +196,10 @@ export function normalizeConfig(raw = {}) {
     throw new Error("config.pollIntervalMs must be an integer from 2000 to 10000");
   }
 
-  const trustProxy = raw.trustProxy === undefined ? true : raw.trustProxy;
-  if (typeof trustProxy !== "boolean") {
-    throw new Error("config.trustProxy must be a boolean");
-  }
-
   const base = {
     schemaVersion: SCHEMA_VERSION,
     mode,
     host: raw.host ?? "127.0.0.1",
-    trustProxy,
     allowInsecureUpstream,
     pollIntervalMs,
     allowLegacyToken: mode === "lan" && (migratedFromLegacy || raw.allowLegacyToken === true),

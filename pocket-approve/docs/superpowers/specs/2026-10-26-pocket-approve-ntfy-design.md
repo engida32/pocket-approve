@@ -2,7 +2,7 @@
 
 Date: 2026-10-26
 Status: Approved for implementation
-Repo: `/home/emmrc-02/personal-works/.worktrees/pocket-approve-v2/pocket-approve`
+Repo: `<workspace>/pocket-approve`
 Baseline: `522a4dc` on `feat/pocket-approve-v2`
 
 ## 1. Summary

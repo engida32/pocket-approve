@@ -227,7 +227,7 @@ test("CONFIG_V2_PATH and load/save follow the data directory after the env chang
   }
 });
 
-test("rejects mistyped enabled, trustProxy, and directory fields", async () => {
+test("rejects mistyped enabled and directory fields", async () => {
   const { normalizeConfig } = await import("../lib/config-v2.mjs?" + Date.now());
   const base = {
     host: "127.0.0.1",
@@ -242,17 +242,14 @@ test("rejects mistyped enabled, trustProxy, and directory fields", async () => {
     () => normalizeConfig({ ...base, servers: [{ id: "a", url: "http://127.0.0.1:1", enabled: 0 }] }),
     /enabled/i,
   );
-  assert.throws(() => normalizeConfig({ ...base, trustProxy: "true" }), /trustProxy/i);
   assert.throws(
     () => normalizeConfig({ ...base, servers: [{ id: "a", url: "http://127.0.0.1:1", directory: 7 }] }),
     /directory/i,
   );
   const ok = normalizeConfig({
     ...base,
-    trustProxy: false,
     servers: [{ id: "a", url: "http://127.0.0.1:1", directory: "/work", enabled: true }],
   });
-  assert.equal(ok.trustProxy, false);
   assert.equal(ok.servers[0].directory, "/work");
 });
 

@@ -315,12 +315,14 @@ export function createNtfy({
   sleep = defaultSleep,
   now = () => Date.now(),
   stallMs = 90000,
+  onReply,
 } = {}) {
   if (!settings) throw new TypeError("settings is required");
   if (typeof dataDir !== "string" || dataDir === "") throw new TypeError("dataDir is required");
   if (!audit || typeof audit.append !== "function") throw new TypeError("audit is required");
   if (!fleet || typeof fleet.reply !== "function") throw new TypeError("fleet is required");
   if (typeof fetchImpl !== "function") throw new TypeError("fetchImpl must be a function");
+  if (onReply !== undefined && typeof onReply !== "function") throw new TypeError("onReply must be a function");
 
   let stopped = true;
   let controller = null;
@@ -438,7 +440,14 @@ export function createNtfy({
       requestId: reply.id,
       result: String(result.status),
     });
-    if (result.status === 200 || result.status === 404 || result.status === 409) return;
+    if (result.status === 200 || result.status === 404 || result.status === 409) {
+      try {
+        onReply?.(reply.id, result.status, reply.decision);
+      } catch (error) {
+        log.error?.(`failed to dismiss desktop notification: ${error.message}`);
+      }
+      return;
+    }
     await publishNotice("Decision did not reach OpenCode. Use the desktop notification or terminal.");
   }
 

@@ -82,7 +82,7 @@ export function buildCloseArgs(id) {
     ...CALL,
     "--method",
     "org.freedesktop.Notifications.CloseNotification",
-    String(id),
+    `uint32 ${id}`,
   ];
 }
 
@@ -167,6 +167,22 @@ export function createDesktop({ spawnFn = spawn, log = console } = {}) {
     pending.resolve({ id: pending.id, decision });
   }
 
+  function spawnClose(id) {
+    let child;
+    try {
+      child = spawnFn("gdbus", buildCloseArgs(id));
+    } catch (error) {
+      logError("desktop: could not run gdbus CloseNotification", error);
+      return;
+    }
+    child.on?.("error", (error) => {
+      logError("desktop: gdbus CloseNotification failed", error);
+    });
+    child.stderr?.on?.("data", (chunk) => {
+      logError(`desktop: gdbus CloseNotification failed: ${String(chunk).trim()}`);
+    });
+  }
+
   function handleEvent(event) {
     const pending = pendingById.get(event.id);
     if (!pending) return;
@@ -181,6 +197,7 @@ export function createDesktop({ spawnFn = spawn, log = console } = {}) {
     }
     if (!DECISIONS.has(event.decision)) return;
     settle(pending, event.decision);
+    spawnClose(pending.id);
     emit(actionHandlers, {
       id: pending.id,
       requestId: pending.requestId,
@@ -308,20 +325,7 @@ export function createDesktop({ spawnFn = spawn, log = console } = {}) {
 
     idByRequest.delete(requestId);
     if (pending) settle(pending, null);
-
-    let child;
-    try {
-      child = spawnFn("gdbus", buildCloseArgs(id));
-    } catch (error) {
-      logError("desktop: could not run gdbus CloseNotification", error);
-      return;
-    }
-    child.on?.("error", (error) => {
-      logError("desktop: gdbus CloseNotification failed", error);
-    });
-    child.stderr?.on?.("data", (chunk) => {
-      logError(`desktop: gdbus CloseNotification failed: ${String(chunk).trim()}`);
-    });
+    spawnClose(id);
   }
 
   function onAction(handler) {

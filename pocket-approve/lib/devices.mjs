@@ -1,10 +1,17 @@
-import { randomBytes } from "node:crypto";
+import { randomBytes, timingSafeEqual } from "node:crypto";
 import { join } from "node:path";
 import { hashToken } from "./auth.mjs";
 import { readPrivateJson, writePrivateJson } from "./store.mjs";
 
 const TOKEN_BYTES = 32;
 const LAST_SEEN_MS = 60_000;
+
+function hashesEqual(left, right) {
+  if (typeof left !== "string" || typeof right !== "string") return false;
+  const a = Buffer.from(left, "utf8");
+  const b = Buffer.from(right, "utf8");
+  return a.length === b.length && timingSafeEqual(a, b);
+}
 
 export function createDeviceStore({ dataDir, now = () => new Date(), log = console } = {}) {
   if (!dataDir) throw new TypeError("dataDir is required");
@@ -60,7 +67,7 @@ export function createDeviceStore({ dataDir, now = () => new Date(), log = conso
   async function findActive(rawToken) {
     if (typeof rawToken !== "string" || rawToken === "") return null;
     const hash = `sha256:${hashToken(rawToken).toString("hex")}`;
-    return devices.find((item) => item.tokenHash === hash && item.revokedAt === null) ?? null;
+    return devices.find((item) => hashesEqual(item.tokenHash, hash) && item.revokedAt === null) ?? null;
   }
 
   function get(id) {
