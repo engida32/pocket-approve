@@ -318,7 +318,7 @@ Validation:
 - `lastEventId` is a string or null.
 - `lastEventAt` is an ISO timestamp or null.
 
-`data/ntfy.pid`, mode 0600, contains the decimal PID of the running connect process followed by a newline. It is created after settings load and before the runtime starts. It is removed on clean exit and on startup failure. It is not part of the settings JSON and never contains a topic or secret.
+`data/ntfy.pid`, mode 0600, contains the decimal PID of the running connect process followed by a newline. It is created before settings are loaded or rotated, and before the runtime starts. It is removed on clean exit and on startup failure. It is not part of the settings JSON and never contains a topic or secret.
 
 `data/seen.json` is unchanged. Audit entries use the existing `reply` and `test_notification` actions.
 
@@ -475,7 +475,8 @@ Tasks 2 and 3 add the message construction and stream cases below to this file, 
 - Settings generation produces valid topic and secret formats and distinct topics.
 - Settings validation rejects HTTP, a path, a missing secret, equal topics, and bad topic characters.
 - `ntfyLink` produces the expected Android link and encodes the display name.
-- `signReply` and `verifyReply` accept a valid signature and reject a changed decision, changed ID, missing field, and bad JSON.
+- `signReply` and `verifyReply` accept a valid signature and reject a changed decision or changed ID.
+- `parseReply` rejects malformed JSON, a missing field, an unknown decision, and a bad signature.
 - The action objects have the correct URL, method, headers, body, and `clear`.
 - `buildRequestMessage` includes the server label, summary, command, path, and patterns.
 - `fitMessage` keeps the serialized message under 4000 bytes and preserves the actions.
