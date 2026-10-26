@@ -32,7 +32,9 @@ const CALL = [
   "/org/freedesktop/Notifications",
 ];
 
-const MONITOR = ["monitor", "--session", "--dest", "org.freedesktop.Notifications"];
+const MONITOR_MATCH = "type='signal',interface='org.freedesktop.Notifications'";
+const NOTIFICATION_PATH = "/org/freedesktop/Notifications";
+const NOTIFICATION_INTERFACE = "org.freedesktop.Notifications";
 
 function escapeMarkup(value) {
   return String(value ?? "").replace(/[&<>]/g, (char) => MARKUP_ESCAPES[char]);
@@ -89,17 +91,48 @@ export function parseNotifyId(stdout) {
   return match ? Number(match[1]) : null;
 }
 
-export function parseActionLine(line) {
-  const text = String(line ?? "");
-  if (text.includes("ActionInvoked")) {
-    const match = text.match(/ActionInvoked\s*\(\s*uint32\s+(\d+)\s*,\s*'([^']*)'\s*\)/);
-    return match ? { id: Number(match[1]), decision: match[2] } : null;
-  }
-  if (text.includes("NotificationClosed")) {
-    const match = text.match(/NotificationClosed\s*\(\s*uint32\s+(\d+)\s*,\s*uint32\s+\d+\s*\)/);
-    return match ? { id: Number(match[1]), closed: true } : null;
-  }
-  return null;
+function unescapeSignalString(value) {
+  return String(value ?? "").replace(/\\(x[0-9a-fA-F]{2}|[0-7]{1,3}|[\s\S])/g, (match, code) => {
+    if (/^x[0-9a-fA-F]{2}$/.test(code)) return String.fromCharCode(Number.parseInt(code.slice(1), 16));
+    if (/^[0-7]{1,3}$/.test(code)) return String.fromCharCode(Number.parseInt(code, 8));
+    const simple = { n: "\n", r: "\r", t: "\t", b: "\b", f: "\f", v: "\v", a: "\x07" };
+    return simple[code] ?? code;
+  });
+}
+
+export function createSignalParser(onEvent) {
+  let current = null;
+  const emit = typeof onEvent === "function" ? onEvent : () => {};
+  return function feed(line) {
+    const text = String(line ?? "");
+    const header = text.match(/^signal\s+time=.*\bpath=([^;]+); interface=([^;]+); member=([A-Za-z0-9_]+)/);
+    if (header) {
+      const kind = header[3] === "ActionInvoked" ? "action" : header[3] === "NotificationClosed" ? "closed" : null;
+      current = kind && header[1] === NOTIFICATION_PATH && header[2] === NOTIFICATION_INTERFACE
+        ? { kind, id: null, decision: null }
+        : null;
+      return;
+    }
+    if (!current) return;
+    const integer = text.match(/^\s+u?int32\s+(\d+)\s*$/);
+    if (integer) {
+      if (current.id === null) current.id = Number(integer[1]);
+      if (current.kind === "closed" && current.id !== null) {
+        const event = { id: current.id, closed: true };
+        current = null;
+        emit(event);
+      }
+      return;
+    }
+    const string = text.match(/^\s+string\s+"((?:\\.|[^"\\])*)"\s*$/);
+    if (string && current.kind === "action" && current.id !== null) {
+      const event = { id: current.id, decision: unescapeSignalString(string[1]) };
+      current = null;
+      emit(event);
+      return;
+    }
+    if (/^\S/.test(text)) current = null;
+  };
 }
 
 export function createDesktop({ spawnFn = spawn, log = console } = {}) {
@@ -168,7 +201,7 @@ export function createDesktop({ spawnFn = spawn, log = console } = {}) {
     if (monitor) return true;
     let child;
     try {
-      child = spawnFn("gdbus", MONITOR);
+      child = spawnFn("dbus-monitor", ["--session", MONITOR_MATCH]);
     } catch (error) {
       logError("desktop: could not start the notification monitor", error);
       return false;
@@ -194,10 +227,12 @@ export function createDesktop({ spawnFn = spawn, log = console } = {}) {
     child.stdout.on("error", (error) => {
       logError("desktop: notification monitor output failed", error);
     });
-    createInterface({ input: child.stdout }).on("line", (line) => {
-      const event = parseActionLine(line);
-      if (event) handleEvent(event);
+    child.stderr?.on("error", (error) => {
+      logError("desktop: notification monitor error output failed", error);
     });
+    child.stderr?.resume?.();
+    const feed = createSignalParser(handleEvent);
+    createInterface({ input: child.stdout }).on("line", feed);
     return true;
   }
 

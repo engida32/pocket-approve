@@ -6,7 +6,7 @@ import {
   buildNotifyArgs,
   buildCloseArgs,
   parseNotifyId,
-  parseActionLine,
+  createSignalParser,
   gvariantString,
   createDesktop,
 } from "../lib/desktop.mjs";
@@ -20,13 +20,14 @@ function fakeSpawn({
 } = {}) {
   const children = [];
   const spawnFn = (cmd, args) => {
-    if (throwOnMonitor && args[0] === "monitor") throw new Error("monitor spawn failed");
+    if (throwOnMonitor && cmd === "dbus-monitor") throw new Error("monitor spawn failed");
     if (throwOnCall && args[0] === "call") throw new Error("spawn failed");
     const child = new EventEmitter();
     child.stdout = new PassThrough();
     child.stderr = new PassThrough();
     child.kill = () => {};
     child.args = args;
+    child.cmd = cmd;
     children.push(child);
     if (args[0] === "call") {
       queueMicrotask(() => {
@@ -40,7 +41,25 @@ function fakeSpawn({
 }
 
 function monitorChild(children) {
-  return children.find((child) => child.args[0] === "monitor");
+  return children.find((child) => child.cmd === "dbus-monitor");
+}
+
+function actionBlock(id, decision, sender = ":1.24") {
+  return [
+    `signal time=1792973266.787843 sender=${sender} -> destination=(null destination) serial=198816 path=/org/freedesktop/Notifications; interface=org.freedesktop.Notifications; member=ActionInvoked`,
+    `   uint32 ${id}`,
+    `   string "${decision}"`,
+    "",
+  ].join("\n");
+}
+
+function closedBlock(id, sender = ":1.24") {
+  return [
+    `signal time=1792973266.787843 sender=${sender} -> destination=(null destination) serial=198816 path=/org/freedesktop/Notifications; interface=org.freedesktop.Notifications; member=NotificationClosed`,
+    `   uint32 ${id}`,
+    "   uint32 2",
+    "",
+  ].join("\n");
 }
 
 test("buildNotifyArgs carries the title, summary, urgency, icon and three actions", () => {
@@ -105,38 +124,35 @@ test("buildCloseArgs closes the notification by id", () => {
   ]);
 });
 
-test("parses the notification id and action signal", () => {
+test("parses the notification id", () => {
   assert.equal(parseNotifyId("(uint32 39,)\n"), 39);
-  assert.deepEqual(
-    parseActionLine(
-      "/org/freedesktop/Notifications: org.freedesktop.Notifications.ActionInvoked (uint32 39, 'always')",
-    ),
-    { id: 39, decision: "always" },
-  );
-  assert.deepEqual(
-    parseActionLine(
-      "/org/freedesktop/Notifications: org.freedesktop.Notifications.NotificationClosed (uint32 39, uint32 2)",
-    ),
-    { id: 39, closed: true },
-  );
-  assert.equal(parseActionLine("Monitoring signals from all objects"), null);
-});
-
-test("parsers tolerate whitespace and reject noise", () => {
   assert.equal(parseNotifyId("( uint32  41 , )\n"), 41);
   assert.equal(parseNotifyId("error: nothing here\n"), null);
-  assert.deepEqual(
-    parseActionLine(
-      "/org/freedesktop/Notifications: org.freedesktop.Notifications.NotificationClosed (uint32 5, uint32 1)",
-    ),
-    { id: 5, closed: true },
-  );
-  assert.equal(
-    parseActionLine(
-      "/org/freedesktop/Notifications: org.freedesktop.Notifications.ActionInvoked (uint32 5, 'other')",
-    ).id,
-    5,
-  );
+});
+
+test("parses real dbus-monitor action and close blocks", () => {
+  const events = [];
+  const feed = createSignalParser((event) => events.push(event));
+  for (const line of actionBlock(39, "always").split("\n")) feed(line);
+  for (const line of closedBlock(40).split("\n")) feed(line);
+  assert.deepEqual(events, [
+    { id: 39, decision: "always" },
+    { id: 40, closed: true },
+  ]);
+});
+
+test("the signal parser ignores noise, other members and other paths", () => {
+  const events = [];
+  const feed = createSignalParser((event) => events.push(event));
+  feed("Monitoring signals from all objects");
+  feed("signal time=1.0 sender=:1.24 -> destination=(null destination) serial=1 path=/org/freedesktop/Notifications; interface=org.freedesktop.Notifications; member=ActionInvoked");
+  feed("   string \"once\"");
+  feed("signal time=1.0 sender=:1.24 -> destination=(null destination) serial=2 path=/other; interface=org.freedesktop.Notifications; member=ActionInvoked");
+  feed("   uint32 7");
+  feed("   string \"once\"");
+  feed("method call time=1.0 sender=:1.9 -> destination=org.freedesktop.Notifications serial=3 path=/org/freedesktop/Notifications; interface=org.freedesktop.Notifications; member=Notify");
+  feed("   string \"title\"");
+  assert.deepEqual(events, []);
 });
 
 test("action resolves the request, fires onAction, and close dismisses it", async () => {
@@ -149,9 +165,7 @@ test("action resolves the request, fires onAction, and close dismisses it", asyn
 
   const pending = desktop.notify({ id: "per_1", title: "Bash: touch x", summary: "touch x" });
   await new Promise((resolve) => setTimeout(resolve, 0));
-  monitorChild(children).stdout.write(
-    "/org/freedesktop/Notifications: org.freedesktop.Notifications.ActionInvoked (uint32 7, 'once')\n",
-  );
+  monitorChild(children).stdout.write(actionBlock(7, "once"));
   assert.deepEqual(await pending, { id: 7, decision: "once" });
   assert.equal(actions.length, 1);
   assert.equal(actions[0].requestId, "per_1");
@@ -181,9 +195,7 @@ test("NotificationClosed releases the request without approving", async () => {
 
   const pending = desktop.notify({ id: "per_9", title: "t", summary: "s" });
   await new Promise((resolve) => setTimeout(resolve, 0));
-  monitorChild(children).stdout.write(
-    "/org/freedesktop/Notifications: org.freedesktop.Notifications.NotificationClosed (uint32 11, uint32 2)\n",
-  );
+  monitorChild(children).stdout.write(closedBlock(11));
 
   assert.deepEqual(await pending, { id: 11, decision: null });
   assert.equal(closed.length, 1);
@@ -198,9 +210,7 @@ test("an unknown action never becomes a decision", async () => {
   await new Promise((resolve) => setTimeout(resolve, 0));
   const monitor = monitorChild(children);
 
-  monitor.stdout.write(
-    "/org/freedesktop/Notifications: org.freedesktop.Notifications.ActionInvoked (uint32 7, 'dismiss')\n",
-  );
+  monitor.stdout.write(actionBlock(7, "dismiss"));
   await new Promise((resolve) => setTimeout(resolve, 0));
   desktop.close("per_4");
   assert.deepEqual(await pending, { id: 7, decision: null });
@@ -267,9 +277,7 @@ test("a throwing action handler is logged, not thrown", async () => {
 
   const pending = desktop.notify({ id: "per_5", title: "t", summary: "s" });
   await new Promise((resolve) => setTimeout(resolve, 0));
-  monitorChild(children).stdout.write(
-    "/org/freedesktop/Notifications: org.freedesktop.Notifications.ActionInvoked (uint32 7, 'reject')\n",
-  );
+  monitorChild(children).stdout.write(actionBlock(7, "reject"));
 
   assert.deepEqual(await pending, { id: 7, decision: "reject" });
   assert.equal(errors.length, 1);
