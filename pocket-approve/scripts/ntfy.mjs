@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 import { createHash } from "node:crypto";
-import { basename, isAbsolute } from "node:path";
+import { basename, isAbsolute, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 import { DATA_DIR } from "../lib/config.mjs";
 import { loadConfigV2 } from "../lib/config-v2.mjs";
 import { createNtfyRuntime } from "../lib/ntfy-runtime.mjs";
@@ -103,7 +104,7 @@ export function serversForDirectories(directories, { url = DEFAULT_OPENCODE } = 
   if (unique.length === 0) {
     return [{ id: "local", label: "OpenCode", url, directory: null }];
   }
-  return unique.map((directory) => {
+  return unique.slice(0, MAX_SERVERS).map((directory) => {
     const label = labelFor(directory);
     const digest = createHash("sha256").update(directory).digest("hex").slice(0, 8);
     return { id: `${slug(label) || "project"}-${digest}`, label, url, directory };
@@ -155,7 +156,7 @@ function parseArgs(argv) {
     else if (arg === "--opencode") {
       const value = argv[++index];
       if (!value) throw new Error("--opencode needs a value");
-      options.opencode = value;
+      options.opencode = originOnly(value, "--opencode");
     } else if (arg === "--label") {
       const value = argv[++index];
       if (!value) throw new Error("--label needs a value");
@@ -165,6 +166,7 @@ function parseArgs(argv) {
       throw new Error(`Unknown option: ${arg}`);
     }
   }
+  options.opencode = originOnly(options.opencode, "--opencode");
   return options;
 }
 
@@ -193,13 +195,6 @@ async function qr(value) {
   qrcode.generate(value, { small: true });
 }
 
-async function waitForSignal() {
-  await new Promise((resolve) => {
-    process.once("SIGINT", resolve);
-    process.once("SIGTERM", resolve);
-  });
-}
-
 async function main() {
   const options = parseArgs(process.argv.slice(2));
   if (options.help) {
@@ -220,14 +215,29 @@ async function main() {
 
   const { servers, pollIntervalMs } = await loadServers(options);
   if (servers.length === 0) throw new Error("No OpenCode servers found. Start OpenCode or run npm run setup.");
-  let settings = await loadSettings(DATA_DIR);
-  if (!settings) settings = createSettings();
-  if (options.rotate) settings = rotateSettings(settings);
-  settings = await saveSettings(DATA_DIR, settings);
+
+  let signalled = false;
+  let signalResolve = () => {};
+  const signalPromise = new Promise((resolveSignal) => {
+    signalResolve = resolveSignal;
+  });
+  const onSignal = () => {
+    if (signalled) return;
+    signalled = true;
+    signalResolve();
+  };
+  process.once("SIGINT", onSignal);
+  process.once("SIGTERM", onSignal);
 
   await acquirePid(DATA_DIR);
   let runtime = null;
   try {
+    let settings = await loadSettings(DATA_DIR);
+    if (!settings) settings = createSettings();
+    if (options.rotate) settings = rotateSettings(settings);
+    settings = await saveSettings(DATA_DIR, settings);
+    if (signalled) return;
+
     runtime = createNtfyRuntime({
       servers,
       pollIntervalMs,
@@ -237,6 +247,7 @@ async function main() {
     });
     await runtime.init();
     await runtime.start();
+    if (signalled) return;
 
     console.log(`Watching ${servers.length} server(s) through ${settings.baseUrl}.`);
     console.log("Desktop notifications stay on when the desktop notifier is available.");
@@ -250,21 +261,32 @@ async function main() {
     } else {
       console.log("For iOS, run npm run connect -- --show-topic and add the server and topic manually.");
     }
+    if (signalled) return;
     if (options.test) {
       const { id } = await runtime.ntfy.sendTest();
+      if (signalled) return;
       console.log("Test notification sent. Tap the button on your phone.");
-      await runtime.ntfy.waitForTest(id);
+      await Promise.race([runtime.ntfy.waitForTest(id), signalPromise]);
+      if (signalled) return;
       console.log("Test reply received.");
     }
     console.log("Press Ctrl+C to disconnect. The phone stays subscribed.");
-    await waitForSignal();
+    await signalPromise;
   } finally {
-    if (runtime) await runtime.stop();
-    await releasePid(DATA_DIR, process.pid);
+    process.removeListener("SIGINT", onSignal);
+    process.removeListener("SIGTERM", onSignal);
+    try {
+      if (runtime) await runtime.stop();
+    } finally {
+      await releasePid(DATA_DIR, process.pid);
+    }
   }
 }
 
-main().catch((error) => {
-  console.error(error.message);
-  process.exitCode = 1;
-});
+const entry = process.argv[1] ? resolve(process.argv[1]) : "";
+if (entry === fileURLToPath(import.meta.url)) {
+  main().catch((error) => {
+    console.error(error.message);
+    process.exitCode = 1;
+  });
+}

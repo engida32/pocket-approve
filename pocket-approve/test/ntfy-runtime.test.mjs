@@ -1,6 +1,11 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { createNtfyRuntime } from "../lib/ntfy-runtime.mjs";
+import {
+  directoriesFromSessions,
+  discoverSessions,
+  serversForDirectories,
+} from "../scripts/ntfy.mjs";
 
 test("createNtfyRuntime wires only the browserless dependencies", async () => {
   const events = [];
@@ -51,4 +56,72 @@ test("the CLI prints usage for --help", () => {
   assert.equal(result.status, 0);
   assert.match(result.stdout, /--disconnect/);
   assert.match(result.stdout, /--rotate/);
+});
+
+test("discoverSessions requests the session list with the expected options", async () => {
+  const calls = [];
+  const fetchImpl = async (url, init) => {
+    calls.push({ url: String(url), init });
+    return { ok: true, status: 200, json: async () => [{ directory: "/work/alpha" }] };
+  };
+  const sessions = await discoverSessions({ baseUrl: "http://127.0.0.1:4096", fetchImpl });
+  assert.deepEqual(sessions, [{ directory: "/work/alpha" }]);
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].url, "http://127.0.0.1:4096/session?limit=1000");
+  assert.equal(calls[0].init.headers.accept, "application/json");
+  assert.equal(calls[0].init.redirect, "error");
+  assert.ok(calls[0].init.signal instanceof AbortSignal);
+  assert.equal(calls[0].init.signal.aborted, false);
+});
+
+test("discoverSessions rejects invalid origins and non-array payloads", async () => {
+  await assert.rejects(
+    discoverSessions({ baseUrl: "http://127.0.0.1:4096/path", fetchImpl: async () => ({}) }),
+    /must be an origin/,
+  );
+  await assert.rejects(
+    discoverSessions({ baseUrl: "http://user:pass@127.0.0.1:4096", fetchImpl: async () => ({}) }),
+    /must not include credentials/,
+  );
+  await assert.rejects(
+    discoverSessions({
+      baseUrl: "http://127.0.0.1:4096",
+      fetchImpl: async () => ({ ok: true, status: 200, json: async () => ({ not: "an array" }) }),
+    }),
+    /unexpected session list/,
+  );
+});
+
+test("directoriesFromSessions filters, dedupes, sorts, and caps", () => {
+  const sessions = [
+    { directory: "/beta", time: { updated: 10 } },
+    { directory: "relative/ignored", time: { updated: 999 } },
+    { directory: "/alpha", time: { updated: 20 } },
+    { directory: "/gamma", time: { updated: 20 } },
+    { directory: "/beta", time: { updated: 50 } },
+    { directory: "/delta", time: { updated: 5 } },
+  ];
+  assert.deepEqual(directoriesFromSessions(sessions), ["/beta", "/alpha", "/gamma", "/delta"]);
+  assert.deepEqual(directoriesFromSessions(sessions, 3), ["/beta", "/alpha", "/gamma"]);
+});
+
+test("serversForDirectories hashes ids deterministically and falls back locally", () => {
+  const url = "http://127.0.0.1:4096";
+  const servers = serversForDirectories(["/work/alpha", "/work/beta", "/work/alpha"], { url });
+  assert.deepEqual(servers.map((server) => server.label), ["alpha", "beta"]);
+  assert.equal(servers[0].directory, "/work/alpha");
+  assert.equal(servers[0].url, url);
+  assert.match(servers[0].id, /^alpha-[0-9a-f]{8}$/);
+  const repeat = serversForDirectories(["/work/alpha"], { url });
+  assert.equal(repeat[0].id, servers[0].id);
+  assert.notEqual(servers[0].id, servers[1].id);
+  assert.deepEqual(serversForDirectories([], { url }), [
+    { id: "local", label: "OpenCode", url, directory: null },
+  ]);
+});
+
+test("serversForDirectories caps at 50 servers", () => {
+  const directories = Array.from({ length: 51 }, (_, index) => `/work/project-${index}`);
+  const servers = serversForDirectories(directories, { url: "http://127.0.0.1:4096" });
+  assert.equal(servers.length, 50);
 });
