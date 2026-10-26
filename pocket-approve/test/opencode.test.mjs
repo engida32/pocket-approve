@@ -44,6 +44,29 @@ test("list and reply hit the live-shaped endpoints", async (t) => {
   assert.deepEqual(posted, { reply: "once" });
 });
 
+test("client scopes list and reply to a project directory", async (t) => {
+  const urls = [];
+  const server = http.createServer((req, res) => {
+    urls.push(req.url);
+    if (req.method === "GET") return json(res, []);
+    if (req.method === "POST") return json(res, true);
+    res.writeHead(404).end();
+  });
+  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+  t.after(() => server.close());
+
+  const client = createClient({
+    baseUrl: `http://127.0.0.1:${server.address().port}`,
+    directory: "/tmp/notify project",
+  });
+  await client.list();
+  await client.reply("per_1", "reject");
+  assert.deepEqual(urls, [
+    "/permission?directory=%2Ftmp%2Fnotify%20project",
+    "/permission/per_1/reply?directory=%2Ftmp%2Fnotify%20project",
+  ]);
+});
+
 test("client sends no auth header without a password", async (t) => {
   const server = http.createServer((req, res) => {
     assert.equal(req.headers.authorization, undefined);
@@ -119,4 +142,48 @@ test("adapter tolerates missing patterns and metadata", async () => {
       summary: "(no details)",
     },
   ]);
+});
+
+test("adapter normalize tolerates null and ignores array metadata", async () => {
+  const { normalize } = await import("../lib/adapters/opencode.mjs");
+  const nulled = normalize(null);
+  assert.equal(nulled.id, undefined);
+  assert.deepEqual(nulled.patterns, []);
+  assert.deepEqual(nulled.metadata, {});
+  assert.deepEqual(normalize({ metadata: [] }).metadata, {});
+  assert.deepEqual(normalize({ metadata: { command: "x" } }).metadata, { command: "x" });
+});
+
+test("adapter preserves always and tool when OpenCode sends them", async () => {
+  const { createOpenCodeSource } = await import("../lib/adapters/opencode.mjs");
+  const source = createOpenCodeSource({
+    list: async () => [{
+      id: "per_4",
+      sessionID: "ses_4",
+      permission: "bash",
+      patterns: ["git status"],
+      always: ["git status"],
+      tool: "bash",
+      metadata: {},
+    }],
+    reply: async () => true,
+  });
+  const [request] = await source.list();
+  assert.deepEqual(request.always, ["git status"]);
+  assert.equal(request.tool, "bash");
+});
+
+test("client aborts a slow upstream request", async (t) => {
+  const server = http.createServer((_req, res) => setTimeout(() => json(res, []), 200));
+  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+  t.after(() => server.close());
+  const { createClient } = await import("../lib/opencode.mjs");
+  const client = createClient({
+    baseUrl: `http://127.0.0.1:${server.address().port}`,
+    timeoutMs: 20,
+  });
+  await assert.rejects(client.list(), (error) => {
+    assert.equal(error.code, "UPSTREAM_TIMEOUT");
+    return true;
+  });
 });

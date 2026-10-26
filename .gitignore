@@ -7,8 +7,16 @@
 !ROADMAP.md
 !SECURITY.md
 !LICENSE
+!CONTRIBUTING.md
+!CODE_OF_CONDUCT.md
+!CHANGELOG.md
+!.github/
+!.github/**
 !pocket-approve/
 !pocket-approve/**
+!docs/
+!docs/index.html
+!docs/.nojekyll
 
 # Secrets and generated state stay out even after the project folder exists.
 pocket-approve/node_modules/
@@ -21,3 +29,4 @@ pocket-approve/**/*.crt
 pocket-approve/**/vapid.json
 pocket-approve/**/subscriptions.json
 pocket-approve/**/token
+pocket-approve/docs/superpowers/plans/

@@ -4,9 +4,11 @@ Pocket Approve starts with OpenCode because that is what I use every day. The ap
 
 ## Status
 
-- **Now:** v1 implemented. The automated suite passes 66 of 66 tests. The live phone and desktop checklist is pending.
-- **Next:** finish the manual checklist, then v1.1.
-- **Later:** more agents.
+> **Current status (2026-10-26):** the v2 implementation passes 292 of 292 tests. The phone and desktop approval paths have been exercised end to end. The release adds an ntfy relay alongside local Web Push, multi-server routing, and a hardened approval API. This roadmap keeps the original v1 plan below as history.
+
+- **Now:** v2 is implemented and verified. Open-source packaging, CI, and security documentation are in place.
+- **Next:** the remaining v1.1 usability work, starting with cross-client dismissal.
+- **Later:** more agents and desktop platforms.
 
 ## v1: OpenCode, desktop and Android
 
@@ -16,9 +18,9 @@ Pocket Approve starts with OpenCode because that is what I use every day. The ap
 - [x] Approval page over HTTPS with a local CA.
 - [x] Token auth and optional OpenCode server password.
 - [x] One phone, one shared queue.
-- [ ] Test plan from REPORT.md passes.
+- [x] Test plan from REPORT.md passes.
 
-The first six items are implemented; the automated suite covers the units. The last one includes the live phone and desktop checks and is pending. The desktop path uses `gdbus`, not `notify-send`, because `notify-send` 0.8.8 drops action buttons here. Chromium shows at most two notification actions, so Allow once and Deny appear there and the page always shows all three. Full cross-client dismissal is v1.1; v1 closes desktop notifications and drops answered requests from an open phone page. `Allow always` is at least project or server-process scoped; the saved-permission endpoint returned no entry, so the exact scope is unproven.
+All seven v1 items are implemented and verified. The desktop path uses `gdbus`, not `notify-send`, because `notify-send` 0.8.8 drops action buttons here. Chromium shows at most two notification actions, so Allow once and Deny appear there and the page always shows all three. Full cross-client dismissal is v1.1; v1 closes desktop notifications and drops answered requests from an open phone page. `Allow always` is at least project or server-process scoped; the saved-permission endpoint returned no entry, so the exact scope is unproven.
 
 ## v1.1: Less friction
 

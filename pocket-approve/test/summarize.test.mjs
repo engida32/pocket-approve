@@ -58,3 +58,10 @@ test("title copes with missing patterns and permission", () => {
   assert.equal(titleFor({ permission: "bash", patterns: ["  git   status  "] }), "Bash: git status");
   assert.equal(titleFor({ permission: "bash", patterns: [null, "second"] }), "Bash: second");
 });
+
+test("titles are capped for notification payloads", async () => {
+  const { titleFor } = await import("../lib/summarize.mjs");
+  const title = titleFor({ permission: "bash", patterns: ["x".repeat(300)] });
+  assert.equal(title.length, 64);
+  assert.ok(title.endsWith("..."));
+});

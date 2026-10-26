@@ -1,5 +1,7 @@
 # Pocket Approve: approvals for OpenCode on your phone and desktop
 
+> **Historical v1 report (2026-10-25).** The current v2 implementation passes 292 of 292 tests and the phone and desktop paths have been verified. See `README.md` and `SECURITY.md` for the current feature set and threat model.
+
 Status: v1 implemented. The automated suite passes 66 of 66 tests. The live phone and desktop path has not been manually verified; the checklist near the end of this report is pending. The public repository is <https://github.com/engida32/pocket-approve>.
 
 ## The problem
