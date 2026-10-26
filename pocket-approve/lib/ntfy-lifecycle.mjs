@@ -48,7 +48,6 @@ export async function isOurProcess(pid, {
 } = {}) {
   if (platform !== "linux") return true;
   const cmdline = await readCmdlineFn(pid);
-  if (cmdline === "") return true;
   return cmdline.includes("scripts/ntfy.mjs");
 }
 
@@ -56,11 +55,17 @@ export async function acquirePid(dataDir, {
   pid = process.pid,
   alive = isAlive,
   ours = isOurProcess,
+  readCmdlineFn,
   platform = process.platform,
 } = {}) {
-  const existing = await readPid(dataDir);
+  let existing = null;
+  try {
+    existing = await readPid(dataDir);
+  } catch {
+    await unlink(pidPath(dataDir)).catch(() => {});
+  }
   if (existing !== null) {
-    if (alive(existing) && await ours(existing, { platform })) {
+    if (alive(existing) && await ours(existing, { platform, readCmdlineFn })) {
       throw new Error(`Pocket Approve connect is already running (PID ${existing}). Run: npm run disconnect`);
     }
     await unlink(pidPath(dataDir)).catch(() => {});
@@ -85,13 +90,27 @@ export async function stopPid(dataDir, {
   timeoutMs = 5000,
   intervalMs = 100,
 } = {}) {
-  const pid = await readPid(dataDir);
+  let pid;
+  try {
+    pid = await readPid(dataDir);
+  } catch {
+    await unlink(pidPath(dataDir)).catch(() => {});
+    return "stale";
+  }
   if (pid === null) return "none";
   if (!alive(pid) || !(await ours(pid, { platform, readCmdlineFn }))) {
     await unlink(pidPath(dataDir)).catch(() => {});
     return "stale";
   }
-  kill(pid, "SIGTERM");
+  try {
+    kill(pid, "SIGTERM");
+  } catch {
+    if (!alive(pid)) {
+      await unlink(pidPath(dataDir)).catch(() => {});
+      return "stopped";
+    }
+    return "timeout";
+  }
   const settle = wait ?? (async () => {
     const deadline = Date.now() + timeoutMs;
     while (Date.now() < deadline) {

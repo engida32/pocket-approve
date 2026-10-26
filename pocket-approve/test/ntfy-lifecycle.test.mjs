@@ -26,6 +26,28 @@ test("acquirePid writes a 0600 file with a decimal PID", async () => {
   assert.equal(await readFile(pidPath(dir), "utf8"), "4242\n");
 });
 
+test("acquirePid replaces a malformed PID file", async () => {
+  const dir = await tempDir();
+  await writeFile(pidPath(dir), "not-a-pid\n", { mode: 0o600 });
+  const pid = await acquirePid(dir, { pid: 4244, platform: "test" });
+  assert.equal(pid, 4244);
+  assert.equal(await readFile(pidPath(dir), "utf8"), "4244\n");
+});
+
+test("acquirePid forwards its cmdline reader", async () => {
+  const dir = await tempDir();
+  await writeFile(pidPath(dir), "4242\n", { mode: 0o600 });
+  await assert.rejects(
+    acquirePid(dir, {
+      pid: 4244,
+      platform: "linux",
+      alive: () => true,
+      readCmdlineFn: async () => "node scripts/ntfy.mjs",
+    }),
+    /4242/,
+  );
+});
+
 test("acquirePid refuses a live owner and replaces a stale file", async () => {
   const dir = await tempDir();
   await writeFile(pidPath(dir), "4242\n", { mode: 0o600 });
@@ -77,6 +99,20 @@ test("isOurProcess checks the Linux cmdline only", async () => {
   );
 });
 
+test("isOurProcess treats an empty Linux cmdline as not ours", async () => {
+  assert.equal(
+    await isOurProcess(10, { platform: "linux", readCmdlineFn: async () => "" }),
+    false,
+  );
+});
+
+test("stopPid clears a malformed PID file as stale", async () => {
+  const dir = await tempDir();
+  await writeFile(pidPath(dir), "not-a-pid\n", { mode: 0o600 });
+  assert.equal(await stopPid(dir, { platform: "test" }), "stale");
+  assert.equal(await readPid(dir), null);
+});
+
 test("stopPid returns none, stale, or stopped", async () => {
   const dir = await tempDir();
   assert.equal(await stopPid(dir, { platform: "test" }), "none");
@@ -116,6 +152,23 @@ test("stopPid does not signal a PID whose cmdline is not ntfy", async () => {
   assert.equal(await readPid(dir), null);
 });
 
+test("stopPid returns timeout when SIGTERM is denied and keeps the file", async () => {
+  const dir = await tempDir();
+  await writeFile(pidPath(dir), "4242\n", { mode: 0o600 });
+  assert.equal(
+    await stopPid(dir, {
+      platform: "test",
+      alive: () => true,
+      ours: async () => true,
+      kill: () => {
+        throw Object.assign(new Error("denied"), { code: "EPERM" });
+      },
+    }),
+    "timeout",
+  );
+  assert.equal(await readPid(dir), 4242);
+});
+
 test("stopPid reports timeout without SIGKILL", async () => {
   const dir = await tempDir();
   await writeFile(pidPath(dir), "4242\n", { mode: 0o600 });
@@ -135,9 +188,14 @@ test("stopPid reports timeout without SIGKILL", async () => {
   assert.equal(await readPid(dir), 4242);
 });
 
-test("stopPid settles after a real child exits", async () => {
+test("stopPid settles after a real child exits", async (t) => {
   const dir = await tempDir();
   const child = spawn(process.execPath, ["-e", "setTimeout(() => {}, 30000)"], { stdio: "ignore" });
+  t.after(() => {
+    try {
+      child.kill("SIGKILL");
+    } catch {}
+  });
   await writeFile(pidPath(dir), `${child.pid}\n`, { mode: 0o600 });
   const result = await stopPid(dir, { platform: "test", timeoutMs: 3000, intervalMs: 50 });
   assert.equal(result, "stopped");
