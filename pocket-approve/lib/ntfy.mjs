@@ -496,6 +496,12 @@ export function createNtfy({
       controller?.abort();
       await loop;
       await queue;
+      for (const [id, entry] of tests) {
+        clearTimeout(entry.timer);
+        tests.delete(id);
+        testIds.delete(id);
+        entry.reject(new Error("ntfy stopped"));
+      }
     },
     async publishRequest(request, options = {}) {
       const message = buildRequestMessage(request, settings, { allowAlways, ...options });
@@ -523,8 +529,11 @@ export function createNtfy({
           reject(new Error("timed out waiting for test reply"));
         }, timeoutMs);
         tests.set(id, {
+          timer,
+          reject,
           resolve: () => {
             clearTimeout(timer);
+            tests.delete(id);
             testIds.delete(id);
             resolve();
           },

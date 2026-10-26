@@ -377,6 +377,45 @@ test("createNtfy resolves a test reply without calling fleet.reply", async () =>
   assert.equal(audits[0].action, "test_notification");
 });
 
+test("createNtfy stop rejects a pending test wait and clears its timer", async () => {
+  const dir = await tempDir();
+  const ntfy = createNtfy({
+    settings: createSettings(),
+    dataDir: dir,
+    audit: { append() {} },
+    fleet: { reply: async () => ({ status: 200 }) },
+    fetchImpl: async () => ({ ok: true, status: 200, headers: new Headers() }),
+    sleep: async () => {},
+    log: { error() {} },
+  });
+  const realSetTimeout = globalThis.setTimeout;
+  let timer = null;
+  globalThis.setTimeout = (fn, ms, ...args) => {
+    timer = realSetTimeout(fn, ms, ...args);
+    return timer;
+  };
+  let waiting;
+  try {
+    waiting = ntfy.waitForTest("test:pending", 120000);
+  } finally {
+    globalThis.setTimeout = realSetTimeout;
+  }
+  assert.ok(timer, "waitForTest should create a timer");
+  await ntfy.stop();
+  let guardTimer = null;
+  const guard = new Promise((_, reject) => {
+    guardTimer = realSetTimeout(() => reject(new Error("pending test wait did not settle")), 2000);
+  });
+  try {
+    await assert.rejects(Promise.race([waiting, guard]), /ntfy stopped/);
+    assert.equal(timer._destroyed, true);
+  } finally {
+    clearTimeout(guardTimer);
+    clearTimeout(timer);
+  }
+  await ntfy.stop();
+});
+
 function stallingResponse(init) {
   return {
     ok: true,
