@@ -7,13 +7,13 @@ Pocket Approve watches OpenCode permission requests, sends them to your phone an
 [Project page](https://engida32.github.io/pocket-approve/)
 
 ![Status: v2](https://img.shields.io/badge/status-v2-brightgreen)
-![Tests: 292 passing](https://img.shields.io/badge/tests-292%20passing-brightgreen)
+![Tests: 284 passing](https://img.shields.io/badge/tests-284%20passing-brightgreen)
 ![License: MIT](https://img.shields.io/badge/license-MIT-blue)
 ![Node: >=20](https://img.shields.io/badge/node-%3E%3D20-blue)
 
 ## Status
 
-The v2 notification path works end to end. A real OpenCode bash permission was approved from a phone, the command ran, and a repeated tap was rejected. Desktop notifications work on Linux with GNOME and gdbus. The automated suite has 292 passing tests.
+The v2 notification path works end to end. A real OpenCode bash permission was approved from a phone, the command ran, and a repeated tap was rejected. Desktop notifications work on Linux with GNOME and gdbus. The automated suite has 284 passing tests.
 
 Two delivery paths are supported:
 

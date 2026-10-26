@@ -6,7 +6,7 @@
 | --- | --- |
 | 0.1.x (v2) | Supported |
 
-v2 is the current line. The automated suite has 292 passing tests, and phone and desktop approvals have been verified end to end. The v1 notes in `REPORT.md` are historical.
+v2 is the current line. The automated suite has 284 passing tests, and phone and desktop approvals have been verified end to end. The v1 notes in `REPORT.md` are historical.
 
 ## Reporting a vulnerability
 

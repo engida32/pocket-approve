@@ -4,7 +4,7 @@ Pocket Approve starts with OpenCode because that is what I use every day. The ap
 
 ## Status
 
-> **Current status (2026-10-26):** the v2 implementation passes 292 of 292 tests. The phone and desktop approval paths have been exercised end to end. The release adds an ntfy relay alongside local Web Push, multi-server routing, and a hardened approval API. This roadmap keeps the original v1 plan below as history.
+> **Current status (2026-10-26):** the v2 implementation passes 284 of 284 tests. The phone and desktop approval paths have been exercised end to end. The release adds an ntfy relay alongside local Web Push, multi-server routing, and a hardened approval API. This roadmap keeps the original v1 plan below as history.
 
 - **Now:** v2 is implemented and verified. Open-source packaging, CI, and security documentation are in place.
 - **Next:** the remaining v1.1 usability work, starting with cross-client dismissal.
