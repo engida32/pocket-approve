@@ -41,3 +41,14 @@ test("createNtfyRuntime wires only the browserless dependencies", async () => {
     ["desktop.stop"],
   ]);
 });
+
+import { spawnSync } from "node:child_process";
+import { fileURLToPath } from "node:url";
+
+test("the CLI prints usage for --help", () => {
+  const script = fileURLToPath(new URL("../scripts/ntfy.mjs", import.meta.url));
+  const result = spawnSync(process.execPath, [script, "--help"], { encoding: "utf8" });
+  assert.equal(result.status, 0);
+  assert.match(result.stdout, /--disconnect/);
+  assert.match(result.stdout, /--rotate/);
+});
