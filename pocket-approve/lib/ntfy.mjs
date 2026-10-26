@@ -124,3 +124,112 @@ export function parseReply(settings, message) {
   if (!verifyReply(settings.secret, value.id, value.decision, value.sig)) return null;
   return { id: value.id, decision: value.decision };
 }
+
+function cap(value, max) {
+  if (typeof value !== "string" || value === "") return "";
+  if (value.length <= max) return value;
+  return max > 3 ? `${value.slice(0, max - 3)}...` : value.slice(0, max);
+}
+
+function text(value) {
+  return typeof value === "string" ? value.trim() : "";
+}
+
+function detailLines(item) {
+  const metadata = item.metadata && typeof item.metadata === "object" ? item.metadata : {};
+  const lines = [];
+  const add = (label, value) => {
+    const clean = text(value);
+    if (clean !== "") lines.push(`${label}: ${clean}`);
+  };
+  add("Command", metadata.command);
+  add("Path", metadata.path);
+  add("Description", metadata.description);
+  add("Tool", item.tool);
+  add("Permission", item.permission);
+  add("Session", item.sessionID);
+  if (Array.isArray(item.patterns) && item.patterns.length > 0) {
+    add("Patterns", item.patterns.join(", "));
+  }
+  return lines;
+}
+
+function action(settings, item, label, decision) {
+  return {
+    action: "http",
+    label,
+    url: `${settings.baseUrl}/${settings.replyTopic}`,
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      id: item.id,
+      decision,
+      sig: signReply(settings.secret, item.id, decision),
+    }),
+    clear: true,
+  };
+}
+
+function joinMessage(summary, details) {
+  return details.length === 0 ? summary : `${summary}\n\n${details.join("\n")}`;
+}
+
+function byteLength(value) {
+  return Buffer.byteLength(JSON.stringify(value));
+}
+
+export function fitMessage(input, maxBytes = MAX_MESSAGE_BYTES) {
+  if (!input || typeof input !== "object") throw new TypeError("message is required");
+  const out = { ...input, actions: Array.isArray(input.actions) ? [...input.actions] : [] };
+  const parts = String(input.message ?? "").split("\n");
+  const summary = parts.shift() ?? "";
+  const details = parts.filter((line) => line !== "");
+  out.message = joinMessage(summary, details);
+  while (details.length > 0 && byteLength(out) >= maxBytes) {
+    details.pop();
+    out.message = joinMessage(summary, details);
+  }
+  while (details.length > 0 && byteLength(out) >= maxBytes) {
+    let longest = 0;
+    for (let index = 1; index < details.length; index += 1) {
+      if (details[index].length > details[longest].length) longest = index;
+    }
+    if (details[longest].length <= 20) break;
+    details[longest] = details[longest].slice(0, -20);
+    out.message = joinMessage(summary, details);
+  }
+  return out;
+}
+
+export function buildRequestMessage(item, settings, { allowAlways = true, count = 1 } = {}) {
+  if (!item || typeof item.id !== "string" || item.id === "") {
+    throw new TypeError("item.id is required");
+  }
+  const label = text(item.serverLabel) || text(item.serverId) || "OpenCode";
+  const title = cap(`[${label}] ${text(item.title) || "Permission request"}`, 64);
+  const summary = cap(text(item.summary), 140);
+  const details = detailLines(item);
+  if (count > 1) details.push(`Pending: ${count} requests`);
+  const actions = [action(settings, item, "Allow once", "once")];
+  if (allowAlways) actions.push(action(settings, item, "Always allow", "always"));
+  actions.push(action(settings, item, "Deny", "reject"));
+  return fitMessage({
+    topic: settings.outTopic,
+    title,
+    message: joinMessage(summary, details),
+    priority: 4,
+    tags: ["warning"],
+    actions,
+  });
+}
+
+export function buildTestMessage(settings, id) {
+  return fitMessage({
+    topic: settings.outTopic,
+    title: "[Pocket Approve] Test notification",
+    message: "Tap the button to test the reply path. This does not approve a real request.",
+    priority: 4,
+    tags: ["warning"],
+    actions: [action(settings, { id }, "Send test reply", "once")],
+  });
+}

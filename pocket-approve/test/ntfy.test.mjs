@@ -105,3 +105,86 @@ test("parseReply validates JSON, decision, and signature", () => {
   assert.equal(parseReply(settings, JSON.stringify({ id: "alpha:req_1", decision: "maybe", sig: "x" })), null);
   assert.equal(parseReply(settings, JSON.stringify({ id: "alpha:req_1", decision: "once", sig: "x" })), null);
 });
+
+import { buildRequestMessage, buildTestMessage, fitMessage } from "../lib/ntfy.mjs";
+
+const item = {
+  id: "alpha:req_1",
+  serverId: "alpha",
+  serverLabel: "Alpha",
+  sessionID: "ses_1",
+  permission: "bash",
+  patterns: ["rm -rf /tmp/x", "git push"],
+  always: ["Bash(rm:*)"],
+  tool: "bash",
+  metadata: {
+    command: "rm -rf /tmp/x",
+    path: "/home/user/project",
+    description: "Remove a temporary directory",
+  },
+  title: "Bash: rm -rf /tmp/x",
+  summary: "Remove a temporary directory",
+  firstSeen: "2026-10-26T10:00:00.000Z",
+};
+
+test("buildRequestMessage creates three signed HTTP actions", () => {
+  const settings = createSettings();
+  const message = buildRequestMessage(item, settings);
+  assert.equal(message.topic, settings.outTopic);
+  assert.match(message.title, /^\[Alpha\] /);
+  assert.ok(Buffer.byteLength(message.title) <= 64);
+  assert.match(message.message, /Command: rm -rf \/tmp\/x/);
+  assert.match(message.message, /Path: \/home\/user\/project/);
+  assert.match(message.message, /Patterns: rm -rf \/tmp\/x, git push/);
+  assert.equal(message.priority, 4);
+  assert.deepEqual(message.tags, ["warning"]);
+  assert.equal(message.actions.length, 3);
+  assert.deepEqual(message.actions.map((action) => action.label), [
+    "Allow once",
+    "Always allow",
+    "Deny",
+  ]);
+  const body = JSON.parse(message.actions[0].body);
+  assert.equal(body.id, item.id);
+  assert.equal(body.decision, "once");
+  assert.equal(verifyReply(settings.secret, body.id, body.decision, body.sig), true);
+  assert.equal(message.actions[0].url, `${settings.baseUrl}/${settings.replyTopic}`);
+  assert.equal(message.actions[0].method, "POST");
+  assert.equal(message.actions[0].clear, true);
+});
+
+test("buildRequestMessage can omit Always allow", () => {
+  const message = buildRequestMessage(item, createSettings(), { allowAlways: false });
+  assert.deepEqual(message.actions.map((action) => action.label), ["Allow once", "Deny"]);
+});
+
+test("buildTestMessage has one test action and no real request id", () => {
+  const settings = createSettings();
+  const message = buildTestMessage(settings, "test:123");
+  assert.equal(message.actions.length, 1);
+  assert.equal(message.actions[0].label, "Send test reply");
+  assert.deepEqual(JSON.parse(message.actions[0].body), {
+    id: "test:123",
+    decision: "once",
+    sig: signReply(settings.secret, "test:123", "once"),
+  });
+});
+
+test("fitMessage keeps the summary and actions under 4000 bytes", () => {
+  const settings = createSettings();
+  const huge = {
+    ...item,
+    metadata: { command: "x".repeat(12000), path: "y".repeat(4000) },
+  };
+  const message = buildRequestMessage(huge, settings);
+  assert.ok(Buffer.byteLength(JSON.stringify(message)) < 4000);
+  assert.ok(message.message.startsWith(item.summary));
+  assert.equal(message.actions.length, 3);
+});
+
+test("fitMessage does not mutate its input", () => {
+  const input = buildRequestMessage(item, createSettings());
+  const before = JSON.stringify(input);
+  fitMessage(input, 300);
+  assert.equal(JSON.stringify(input), before);
+});
