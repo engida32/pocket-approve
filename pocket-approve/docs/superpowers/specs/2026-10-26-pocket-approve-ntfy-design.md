@@ -157,23 +157,28 @@ Owns settings, notification construction, signing, publishing, reply streaming, 
 
 Exports:
 
-- `validateNtfySettings(raw)`: validates `baseUrl`, `outTopic`, `replyTopic`, `secret`, `lastEventId`, and `lastEventAt`.
-- `newNtfySettings({baseUrl})`: generates random topics and a secret.
-- `loadNtfySettings(dataDir)`: reads `ntfy.json`, generates and saves it when missing, and throws on corruption.
-- `saveNtfySettings(settings, dataDir)`: atomic write, mode 0600.
-- `ntfyLink(settings, displayName)`: returns `ntfy://<host>/<outTopic>?display=<encoded>`.
+- `ntfySettingsPath(dataDir)`: returns the `ntfy.json` path under `dataDir`.
+- `newToken()`: returns 32 random bytes encoded as base64url, 43 characters.
+- `normalizeSettings(raw)`: validates `baseUrl`, `outTopic`, `replyTopic`, `secret`, `lastEventId`, and `lastEventAt`.
+- `createSettings(now?)`: generates random topics and a secret.
+- `loadSettings(dataDir)`: reads `ntfy.json` and returns `null` when the file is missing. It does not create the file.
+- `saveSettings(dataDir, settings)`: atomic write, mode 0600.
+- `rotateSettings(settings, now?)`: replaces both topics and the secret and clears the cursor.
+- `ntfyLink(settings, display)`: returns `ntfy://<host>/<outTopic>?display=<encoded>`.
 - `signReply(secret, id, decision)`: HMAC-SHA256 over `id + "\n" + decision`, base64url.
-- `verifyReply(secret, body)`: validates JSON, id, decision, and signature with a timing-safe compare.
-- `actionFor(settings, id, decision, label)`: returns the ntfy `http` action object.
-- `buildRequestMessage(item, {count, allowAlways})`: builds the title, message, detail, priority, tags, and actions.
-- `buildTestMessage(settings)`: builds a test message with one Approve action.
-- `fitMessage(message, limit)`: shrinks the detail until the serialized message is under the limit. It removes whole detail lines first, then truncates the longest remaining line when one line alone is too large.
-- `createNtfy({settings, fetchImpl, log, now, dataDir})`: returns `send`, `sendTest`, `start`, `stop`, and `settings`.
+- `verifyReply(secret, id, decision, sig)`: checks the signature with a timing-safe compare.
+- `parseReply(settings, message)`: parses the body and returns `{id, decision}` or `null` when the JSON, id, decision, or signature is invalid.
+- `buildRequestMessage(item, settings, {allowAlways, count})`: builds the title, message, detail, priority, tags, and actions.
+- `buildTestMessage(settings, id)`: builds a test message with one Approve action.
+- `fitMessage(message, maxBytes?)`: shrinks the detail until the serialized message is under the limit. It removes whole detail lines first, then truncates the longest remaining line when one line alone is too large.
+- `createNtfy({settings, dataDir, audit, fleet, allowAlways, fetchImpl, log, sleep, now})`: returns `{settings, start, stop, publishRequest, publishNotice, sendTest, waitForTest}`.
 
 `createNtfy` behavior:
 
-- `send(item, {count})` builds, fits, and publishes the message. It retries three times with short backoff. It throws after the final failure.
-- `sendTest()` publishes a test message with an Approve action whose ID starts with `test:`.
+- `publishRequest(item, {count})` builds, fits, and publishes the message. It retries three times with short backoff. It throws after the final failure.
+- `publishNotice(text)` publishes the failure notice to the outbound topic with priority 4 and the tag `warning`.
+- `sendTest()` publishes a test message with an Approve action whose ID starts with `test:`, then returns that ID.
+- `waitForTest(id, timeoutMs)` waits for the reply carrying that test ID.
 - `start(onReply)` opens `GET <baseUrl>/<replyTopic>/json`. It uses `since=<lastEventId>` when present, otherwise `since=10m`. It parses NDJSON, ignores `open` and `keepalive`, handles `message`, and reconnects with jittered exponential backoff.
 - The stream has a watchdog. If no bytes arrive for 90 seconds, it aborts and reconnects. This is twice the default 45 second keepalive.
 - `stop()` aborts the stream, cancels retries, and waits for the read loop to finish.
@@ -403,7 +408,7 @@ The full publish body is measured after serialization. If it exceeds the limit, 
 2. The ntfy app sends the HTTP request to the reply topic.
 3. The Node process receives the message on the NDJSON stream.
 4. It advances the cursor and deduplicates the message ID in memory.
-5. `verifyReply` parses the body and checks the HMAC in constant time.
+5. `parseReply` parses the body, then `verifyReply(secret, id, decision, sig)` checks the HMAC in constant time.
 6. Invalid signatures are logged and ignored.
 7. A test ID (`test:`) is audited as `test_notification` and acknowledged. It never calls `fleet.reply`.
 8. A normal ID calls `fleet.reply(id, decision)`.
@@ -464,6 +469,8 @@ Reconnection:
 ## 15. Testing
 
 ### Unit tests in `test/ntfy.test.mjs`
+
+Tasks 2 and 3 add the message construction and stream cases below to this file, so this section describes the final file rather than Task 1 alone.
 
 - Settings generation produces valid topic and secret formats and distinct topics.
 - Settings validation rejects HTTP, a path, a missing secret, equal topics, and bad topic characters.
