@@ -188,3 +188,26 @@ test("fitMessage does not mutate its input", () => {
   fitMessage(input, 300);
   assert.equal(JSON.stringify(input), before);
 });
+
+test("fitMessage truncates a long detail line instead of dropping it", () => {
+  const long = {
+    ...item,
+    metadata: { command: "x".repeat(6000) },
+    patterns: [],
+  };
+  const message = buildRequestMessage(long, createSettings());
+  const command = message.message
+    .split("\n")
+    .find((line) => line.startsWith("Command: "));
+  assert.ok(command, "Command detail line should survive");
+  assert.ok(command.endsWith("..."));
+  assert.ok(command.length < 6000);
+  assert.ok(Buffer.byteLength(JSON.stringify(message)) < 4000);
+});
+
+test("buildRequestMessage caps non-ASCII titles at 64 bytes without splitting characters", () => {
+  const nonAscii = { ...item, serverLabel: "日本", title: "🚀".repeat(40) };
+  const message = buildRequestMessage(nonAscii, createSettings());
+  assert.ok(Buffer.byteLength(message.title) <= 64);
+  assert.equal(message.title, Buffer.from(message.title, "utf8").toString("utf8"));
+});

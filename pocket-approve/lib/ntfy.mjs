@@ -131,6 +131,22 @@ function cap(value, max) {
   return max > 3 ? `${value.slice(0, max - 3)}...` : value.slice(0, max);
 }
 
+function capBytes(value, maxBytes) {
+  if (typeof value !== "string" || value === "") return "";
+  if (Buffer.byteLength(value) <= maxBytes) return value;
+  const budget = maxBytes - 3;
+  if (budget <= 0) return "";
+  let result = "";
+  let used = 0;
+  for (const char of value) {
+    const size = Buffer.byteLength(char);
+    if (used + size > budget) break;
+    result += char;
+    used += size;
+  }
+  return `${result}...`;
+}
+
 function text(value) {
   return typeof value === "string" ? value.trim() : "";
 }
@@ -185,7 +201,7 @@ export function fitMessage(input, maxBytes = MAX_MESSAGE_BYTES) {
   const summary = parts.shift() ?? "";
   const details = parts.filter((line) => line !== "");
   out.message = joinMessage(summary, details);
-  while (details.length > 0 && byteLength(out) >= maxBytes) {
+  while (details.length > 1 && byteLength(out) >= maxBytes) {
     details.pop();
     out.message = joinMessage(summary, details);
   }
@@ -195,7 +211,7 @@ export function fitMessage(input, maxBytes = MAX_MESSAGE_BYTES) {
       if (details[index].length > details[longest].length) longest = index;
     }
     if (details[longest].length <= 20) break;
-    details[longest] = details[longest].slice(0, -20);
+    details[longest] = `${details[longest].slice(0, -20)}...`;
     out.message = joinMessage(summary, details);
   }
   return out;
@@ -206,7 +222,7 @@ export function buildRequestMessage(item, settings, { allowAlways = true, count 
     throw new TypeError("item.id is required");
   }
   const label = text(item.serverLabel) || text(item.serverId) || "OpenCode";
-  const title = cap(`[${label}] ${text(item.title) || "Permission request"}`, 64);
+  const title = capBytes(`[${label}] ${text(item.title) || "Permission request"}`, 64);
   const summary = cap(text(item.summary), 140);
   const details = detailLines(item);
   if (count > 1) details.push(`Pending: ${count} requests`);
