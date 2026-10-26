@@ -1,0 +1,674 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Pocket Approve: approve coding agents from your phone</title>
+  <meta name="description" content="Pocket Approve turns OpenCode permission requests into phone notifications. Read the request, approve or deny it, and keep working without returning to the desk.">
+  <meta name="theme-color" content="#0c6b4f">
+  <link rel="canonical" href="https://engida32.github.io/pocket-approve/">
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Crect width='100' height='100' rx='22' fill='%230c6b4f'/%3E%3Cpath d='M26 52l16 16 32-36' fill='none' stroke='white' stroke-width='10' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E">
+  <meta property="og:type" content="website">
+  <meta property="og:title" content="Pocket Approve">
+  <meta property="og:description" content="Approve OpenCode permission requests from your phone.">
+  <meta property="og:url" content="https://engida32.github.io/pocket-approve/">
+  <meta name="twitter:card" content="summary">
+  <style>
+    :root {
+      color-scheme: light;
+      --ink: #18211c;
+      --muted: #5b665f;
+      --paper: #f5f1e8;
+      --card: #fffdf8;
+      --line: #d8d2c4;
+      --green: #0c6b4f;
+      --green-dark: #08513c;
+      --orange: #b85024;
+      --dark: #101915;
+      --max: 1120px;
+      --sans: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
+    }
+
+    * { box-sizing: border-box; }
+
+    html { scroll-behavior: smooth; }
+
+    body {
+      margin: 0;
+      background: var(--paper);
+      color: var(--ink);
+      font-family: var(--sans);
+      font-size: 17px;
+      line-height: 1.65;
+      -webkit-font-smoothing: antialiased;
+    }
+
+    a { color: var(--green-dark); }
+    a:hover { text-decoration-thickness: 2px; }
+    a:focus-visible,
+    button:focus-visible {
+      outline: 3px solid var(--orange);
+      outline-offset: 3px;
+    }
+
+    .skip {
+      position: absolute;
+      left: 1rem;
+      top: -4rem;
+      z-index: 20;
+      padding: .65rem 1rem;
+      background: var(--ink);
+      color: #fff;
+      border-radius: .4rem;
+    }
+    .skip:focus { top: 1rem; }
+
+    .wrap {
+      width: min(calc(100% - 2.5rem), var(--max));
+      margin-inline: auto;
+    }
+
+    .site-header {
+      border-bottom: 1px solid var(--line);
+    }
+    .site-header .wrap {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 1.5rem;
+      padding-block: 1.1rem;
+    }
+    .brand {
+      display: inline-flex;
+      align-items: center;
+      gap: .65rem;
+      color: var(--ink);
+      font-weight: 750;
+      letter-spacing: -.02em;
+      text-decoration: none;
+      font-size: 1.05rem;
+    }
+    .brand svg { width: 1.8rem; height: 1.8rem; flex: none; }
+    nav ul {
+      display: flex;
+      flex-wrap: wrap;
+      gap: .4rem 1.25rem;
+      margin: 0;
+      padding: 0;
+      list-style: none;
+    }
+    nav a {
+      color: var(--muted);
+      text-decoration: none;
+      font-size: .94rem;
+      font-weight: 600;
+    }
+    nav a:hover { color: var(--ink); }
+
+    .hero {
+      position: relative;
+      overflow: hidden;
+      border-bottom: 1px solid var(--line);
+    }
+    .hero::before {
+      content: "";
+      position: absolute;
+      inset: 0;
+      background:
+        radial-gradient(circle at 78% 28%, rgba(12, 107, 79, .13), transparent 35%),
+        radial-gradient(circle at 12% 80%, rgba(184, 80, 36, .09), transparent 30%);
+      pointer-events: none;
+    }
+    .hero .wrap {
+      position: relative;
+      display: grid;
+      grid-template-columns: minmax(0, 1.15fr) minmax(280px, .85fr);
+      align-items: center;
+      gap: clamp(2rem, 6vw, 5rem);
+      padding-block: clamp(3.5rem, 8vw, 7rem);
+    }
+    .eyebrow {
+      margin: 0 0 1rem;
+      color: var(--green-dark);
+      font-size: .82rem;
+      font-weight: 750;
+      letter-spacing: .12em;
+      text-transform: uppercase;
+    }
+    h1, h2, h3 {
+      line-height: 1.1;
+      letter-spacing: -.035em;
+      margin: 0;
+    }
+    h1 {
+      font-size: clamp(2.7rem, 7vw, 5.3rem);
+      max-width: 14ch;
+      font-weight: 800;
+    }
+    .lede {
+      max-width: 58ch;
+      margin: 1.5rem 0 0;
+      color: var(--muted);
+      font-size: clamp(1.05rem, 2vw, 1.22rem);
+    }
+    .actions {
+      display: flex;
+      flex-wrap: wrap;
+      gap: .8rem;
+      margin-top: 2rem;
+    }
+    .button {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      min-height: 2.9rem;
+      padding: .7rem 1.15rem;
+      border: 1px solid var(--line);
+      border-radius: .45rem;
+      background: var(--card);
+      color: var(--ink);
+      font-weight: 700;
+      text-decoration: none;
+    }
+    .button:hover { border-color: var(--ink); }
+    .button.primary {
+      background: var(--green);
+      border-color: var(--green);
+      color: #fff;
+    }
+    .button.primary:hover { background: var(--green-dark); }
+
+    .facts {
+      display: flex;
+      flex-wrap: wrap;
+      gap: .45rem 1.25rem;
+      margin: 2rem 0 0;
+      padding: 0;
+      list-style: none;
+      color: var(--muted);
+      font-size: .9rem;
+      font-weight: 600;
+    }
+    .facts li::before {
+      content: "";
+      display: inline-block;
+      width: .4rem;
+      height: .4rem;
+      margin-right: .5rem;
+      border-radius: 50%;
+      background: var(--green);
+      vertical-align: .1em;
+    }
+
+    .phone-wrap { display: flex; justify-content: center; }
+    .phone {
+      width: min(100%, 320px);
+      padding: .55rem;
+      border: 1px solid #28352f;
+      border-radius: 2rem;
+      background: var(--dark);
+      box-shadow: 0 1.4rem 3rem rgba(24, 33, 28, .18);
+      transform: rotate(2deg);
+    }
+    .phone-screen {
+      min-height: 390px;
+      padding: 1rem .8rem 1.2rem;
+      border-radius: 1.55rem;
+      background:
+        linear-gradient(160deg, rgba(255, 255, 255, .14), transparent 30%),
+        #1b2822;
+      color: #f8f6ef;
+    }
+    .phone-top {
+      display: flex;
+      justify-content: space-between;
+      padding: .2rem .45rem .8rem;
+      color: #aebbb4;
+      font-size: .72rem;
+      font-weight: 650;
+    }
+    .notice {
+      padding: 1rem;
+      border-radius: 1rem;
+      background: #fbf8f0;
+      color: var(--ink);
+      box-shadow: 0 1rem 2rem rgba(0, 0, 0, .18);
+    }
+    .notice-head {
+      display: flex;
+      align-items: center;
+      gap: .45rem;
+      color: var(--green-dark);
+      font-size: .72rem;
+      font-weight: 800;
+      letter-spacing: .08em;
+      text-transform: uppercase;
+    }
+    .notice-dot {
+      width: .55rem;
+      height: .55rem;
+      border-radius: 50%;
+      background: var(--green);
+    }
+    .notice-title {
+      margin: .7rem 0 .2rem;
+      font-size: 1.05rem;
+      font-weight: 800;
+      letter-spacing: -.02em;
+    }
+    .notice-body {
+      margin: 0;
+      padding: .6rem .7rem;
+      border: 1px solid #e3ddcf;
+      border-radius: .45rem;
+      background: #f1ece0;
+      color: #3d4741;
+      font-family: var(--mono);
+      font-size: .76rem;
+      line-height: 1.5;
+      overflow-wrap: anywhere;
+    }
+    .notice-actions {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: .4rem;
+      margin-top: .9rem;
+      font-size: .72rem;
+      font-weight: 750;
+      text-align: center;
+    }
+    .notice-actions span {
+      padding: .55rem .3rem;
+      border: 1px solid #d8d2c4;
+      border-radius: .4rem;
+      background: #fff;
+    }
+    .notice-actions .allow {
+      background: var(--green);
+      border-color: var(--green);
+      color: #fff;
+    }
+    .notice-actions .deny { color: var(--orange); }
+    .phone-note {
+      margin: 1rem .4rem 0;
+      color: #93a29a;
+      font-size: .7rem;
+      text-align: center;
+    }
+
+    section { padding-block: clamp(3.5rem, 7vw, 6rem); }
+    section + section { border-top: 1px solid var(--line); }
+    .section-head {
+      display: grid;
+      grid-template-columns: minmax(0, .8fr) minmax(0, 1.2fr);
+      gap: 1.5rem 3rem;
+      align-items: end;
+      margin-bottom: 2.5rem;
+    }
+    .section-head h2 {
+      font-size: clamp(1.9rem, 4vw, 3rem);
+      font-weight: 800;
+    }
+    .section-head p {
+      margin: 0;
+      max-width: 58ch;
+      color: var(--muted);
+    }
+
+    .steps {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 1rem;
+      margin: 0;
+      padding: 0;
+      list-style: none;
+    }
+    .step {
+      padding: 1.4rem;
+      border: 1px solid var(--line);
+      border-radius: .6rem;
+      background: var(--card);
+    }
+    .step-number {
+      display: inline-grid;
+      place-items: center;
+      width: 2rem;
+      height: 2rem;
+      margin-bottom: 1rem;
+      border-radius: 50%;
+      background: var(--green);
+      color: #fff;
+      font-size: .82rem;
+      font-weight: 800;
+    }
+    .step h3 { font-size: 1.15rem; }
+    .step p {
+      margin: .6rem 0 0;
+      color: var(--muted);
+      font-size: .96rem;
+    }
+
+    .paths {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 1rem;
+    }
+    .path {
+      padding: 1.6rem;
+      border: 1px solid var(--line);
+      border-radius: .6rem;
+      background: var(--card);
+    }
+    .path h3 { font-size: 1.3rem; }
+    .path p { color: var(--muted); }
+    .path ul {
+      margin: 1rem 0 0;
+      padding-left: 1.15rem;
+      color: var(--muted);
+      font-size: .95rem;
+    }
+    .path li + li { margin-top: .35rem; }
+    .tag {
+      display: inline-block;
+      margin-bottom: .7rem;
+      padding: .2rem .55rem;
+      border: 1px solid #bfd2c9;
+      border-radius: 999px;
+      color: var(--green-dark);
+      font-size: .72rem;
+      font-weight: 750;
+      letter-spacing: .06em;
+      text-transform: uppercase;
+    }
+
+    .security {
+      display: grid;
+      grid-template-columns: minmax(0, .8fr) minmax(0, 1.2fr);
+      gap: 2rem 4rem;
+    }
+    .security h2 { font-size: clamp(1.9rem, 4vw, 3rem); font-weight: 800; }
+    .security .lede { margin-top: 1rem; }
+    .check-list {
+      display: grid;
+      gap: .8rem;
+      margin: 0;
+      padding: 0;
+      list-style: none;
+    }
+    .check-list li {
+      position: relative;
+      padding: .95rem 1rem .95rem 2.4rem;
+      border: 1px solid var(--line);
+      border-radius: .5rem;
+      background: var(--card);
+      color: var(--muted);
+      font-size: .95rem;
+    }
+    .check-list li::before {
+      content: "";
+      position: absolute;
+      left: 1rem;
+      top: 1.25rem;
+      width: .55rem;
+      height: .3rem;
+      border-left: 2px solid var(--green);
+      border-bottom: 2px solid var(--green);
+      transform: rotate(-45deg);
+    }
+    .check-list strong { color: var(--ink); }
+
+    .start-grid {
+      display: grid;
+      grid-template-columns: minmax(0, .8fr) minmax(0, 1.2fr);
+      gap: 2rem 4rem;
+      align-items: start;
+    }
+    .start-grid h2 { font-size: clamp(1.9rem, 4vw, 3rem); font-weight: 800; }
+    .start-grid p { color: var(--muted); }
+    .code-block {
+      overflow-x: auto;
+      margin: 0;
+      padding: 1.2rem;
+      border: 1px solid #26332d;
+      border-radius: .55rem;
+      background: #121c17;
+      color: #eef4ef;
+      font-family: var(--mono);
+      font-size: .82rem;
+      line-height: 1.7;
+    }
+    .code-block + .code-block { margin-top: .8rem; }
+    .code-label {
+      margin: 0 0 .4rem;
+      color: var(--muted);
+      font-size: .78rem;
+      font-weight: 750;
+      letter-spacing: .08em;
+      text-transform: uppercase;
+    }
+
+    footer {
+      padding-block: 2rem;
+      border-top: 1px solid var(--line);
+      color: var(--muted);
+      font-size: .9rem;
+    }
+    footer .wrap {
+      display: flex;
+      flex-wrap: wrap;
+      justify-content: space-between;
+      gap: 1rem;
+    }
+    footer ul {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 1rem;
+      margin: 0;
+      padding: 0;
+      list-style: none;
+    }
+
+    @media (max-width: 860px) {
+      .hero .wrap,
+      .section-head,
+      .security,
+      .start-grid {
+        grid-template-columns: 1fr;
+      }
+      .phone { transform: none; }
+      .steps { grid-template-columns: 1fr; }
+      .paths { grid-template-columns: 1fr; }
+    }
+
+    @media (max-width: 620px) {
+      body { font-size: 16px; }
+      .site-header .wrap { align-items: flex-start; flex-direction: column; }
+      nav ul { gap: .4rem 1rem; }
+      .hero .wrap { padding-block: 3rem; }
+      h1 { font-size: clamp(2.4rem, 14vw, 3.6rem); }
+      .facts { gap: .35rem .9rem; }
+    }
+
+    @media (prefers-reduced-motion: reduce) {
+      html { scroll-behavior: auto; }
+      *, *::before, *::after {
+        animation-duration: .01ms !important;
+        animation-iteration-count: 1 !important;
+        transition-duration: .01ms !important;
+      }
+    }
+  </style>
+</head>
+<body>
+  <a class="skip" href="#main">Skip to content</a>
+
+  <header class="site-header">
+    <div class="wrap">
+      <a class="brand" href="#top" aria-label="Pocket Approve home">
+        <svg viewBox="0 0 512 512" aria-hidden="true" focusable="false">
+          <rect width="512" height="512" rx="112" fill="#101915"></rect>
+          <path d="M148 268l68 68 148-156" fill="none" stroke="#ffffff" stroke-width="52" stroke-linecap="round" stroke-linejoin="round"></path>
+        </svg>
+        Pocket Approve
+      </a>
+      <nav aria-label="Main navigation">
+        <ul>
+          <li><a href="#how">How it works</a></li>
+          <li><a href="#paths">Two paths</a></li>
+          <li><a href="#security">Security</a></li>
+          <li><a href="#start">Get started</a></li>
+          <li><a href="https://github.com/engida32/pocket-approve">GitHub</a></li>
+        </ul>
+      </nav>
+    </div>
+  </header>
+
+  <main id="main">
+    <section class="hero" id="top" aria-labelledby="hero-title">
+      <div class="wrap">
+        <div>
+          <p class="eyebrow">Open source for OpenCode</p>
+          <h1 id="hero-title">Approve coding agents from your phone.</h1>
+          <p class="lede">Pocket Approve turns OpenCode permission requests into phone notifications. Read the command, tap Approve, Always, or Deny, and keep the work moving without walking back to the desk.</p>
+          <div class="actions">
+            <a class="button primary" href="#start">Get started</a>
+            <a class="button" href="https://github.com/engida32/pocket-approve">View on GitHub</a>
+          </div>
+          <ul class="facts" aria-label="Project facts">
+            <li>292 tests</li>
+            <li>MIT license</li>
+            <li>Node 20+</li>
+            <li>Self-hosted</li>
+          </ul>
+        </div>
+        <div class="phone-wrap">
+          <div class="phone" aria-hidden="true">
+            <div class="phone-screen">
+              <div class="phone-top"><span>9:41</span><span>Pocket Approve</span></div>
+              <div class="notice">
+                <div class="notice-head"><span class="notice-dot"></span> Permission request</div>
+                <p class="notice-title">Bash: run the test suite</p>
+                <p class="notice-body">npm test<br>2 servers connected</p>
+                <div class="notice-actions">
+                  <span class="allow">Allow once</span>
+                  <span>Always</span>
+                  <span class="deny">Deny</span>
+                  <span>Open</span>
+                </div>
+              </div>
+              <p class="phone-note">Example notification</p>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section id="how" aria-labelledby="how-title">
+      <div class="wrap">
+        <div class="section-head">
+          <h2 id="how-title">One request, three steps.</h2>
+          <p>Pocket Approve polls the OpenCode servers you configure. It does not replace OpenCode or run the agent. It just moves the permission prompt to a device you already have.</p>
+        </div>
+        <ol class="steps">
+          <li class="step">
+            <span class="step-number">1</span>
+            <h3>OpenCode asks</h3>
+            <p>A tool needs permission. The request includes the tool name, the command, and the project directory.</p>
+          </li>
+          <li class="step">
+            <span class="step-number">2</span>
+            <h3>Your phone rings</h3>
+            <p>The request arrives through ntfy or Web Push. On Linux, the desktop gets the same notification.</p>
+          </li>
+          <li class="step">
+            <span class="step-number">3</span>
+            <h3>You decide</h3>
+            <p>Approve once, approve for the session, or deny. Pocket Approve sends the decision back to the original request.</p>
+          </li>
+        </ol>
+      </div>
+    </section>
+
+    <section id="paths" aria-labelledby="paths-title">
+      <div class="wrap">
+        <div class="section-head">
+          <h2 id="paths-title">Pick the path that fits your network.</h2>
+          <p>Both paths use the same approval flow. The difference is how the notification reaches the phone.</p>
+        </div>
+        <div class="paths">
+          <article class="path">
+            <span class="tag">Browserless</span>
+            <h3>ntfy relay</h3>
+            <p>Run <code>npm run connect</code>, scan one QR code, and receive requests in the ntfy app. Works on Android and iOS. The topic acts as a secret and the action links are signed.</p>
+            <ul>
+              <li>No service worker or CA install</li>
+              <li>Use ntfy.sh or a self-hosted ntfy server</li>
+              <li>ntfy.sh can read the message body, so self-host for sensitive commands</li>
+            </ul>
+          </article>
+          <article class="path">
+            <span class="tag">Local only</span>
+            <h3>Web Push</h3>
+            <p>Run the Pocket Approve server on your LAN and install the PWA on your phone. Requests arrive through Web Push, with no public relay in the path.</p>
+            <ul>
+              <li>Needs a one-time local CA install</li>
+              <li>Works with an installable PWA, including iOS Home Screen apps</li>
+              <li>Keeps prompts and commands on your network</li>
+            </ul>
+          </article>
+        </div>
+      </div>
+    </section>
+
+    <section id="security" aria-labelledby="security-title">
+      <div class="wrap security">
+        <div>
+          <h2 id="security-title">Approval is never silent.</h2>
+          <p class="lede">The service is designed around explicit decisions, short-lived pairing, and local ownership of state.</p>
+        </div>
+        <ul class="check-list">
+          <li><strong>Short-lived pairing.</strong> Codes expire after 10 minutes and allow five attempts. A used code cannot be replayed.</li>
+          <li><strong>Hashed device tokens.</strong> Each device gets a 32-byte token. Only a SHA-256 hash is stored, and comparisons are constant time.</li>
+          <li><strong>Constrained API.</strong> Exact origin checks, rate limits, bounded request bodies, and a fixed static file map.</li>
+          <li><strong>Honest about the relay.</strong> ntfy.sh can read notification content. Use a self-hosted ntfy server or the local Web Push path when the command text is sensitive.</li>
+          <li><strong>No inferred approval.</strong> A closed notification or a failed action never becomes a decision. A reply must match the request.</li>
+        </ul>
+      </div>
+    </section>
+
+    <section id="start" aria-labelledby="start-title">
+      <div class="wrap start-grid">
+        <div>
+          <h2 id="start-title">Start in a minute.</h2>
+          <p>You need Node 20 or newer, an OpenCode server, and a phone. The browserless path is the shortest setup.</p>
+          <p><a href="https://github.com/engida32/pocket-approve#readme">Read the full setup guide</a> for multi-server configuration, TLS, pairing, and the security model.</p>
+        </div>
+        <div>
+          <p class="code-label">ntfy relay</p>
+          <pre class="code-block"><code>git clone https://github.com/engida32/pocket-approve.git
+cd pocket-approve/pocket-approve
+npm ci
+npm run connect</code></pre>
+          <p class="code-label">local Web Push</p>
+          <pre class="code-block"><code>npm run setup -- --mode lan --host 192.168.1.20
+npm start
+npm run pair -- --label "My phone"</code></pre>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <footer>
+    <div class="wrap">
+      <p>Pocket Approve is an independent open source project for OpenCode.</p>
+      <ul>
+        <li><a href="https://github.com/engida32/pocket-approve">GitHub</a></li>
+        <li><a href="https://github.com/engida32/pocket-approve/blob/main/SECURITY.md">Security</a></li>
+        <li><a href="https://github.com/engida32/pocket-approve/blob/main/CONTRIBUTING.md">Contributing</a></li>
+        <li><a href="https://github.com/engida32/pocket-approve/blob/main/LICENSE">MIT license</a></li>
+      </ul>
+    </div>
+  </footer>
+</body>
+</html>
