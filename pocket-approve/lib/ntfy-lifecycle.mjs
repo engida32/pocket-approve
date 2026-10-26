@@ -1,4 +1,4 @@
-import { readFile, unlink, writeFile } from "node:fs/promises";
+import { mkdir, readFile, unlink, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 
 const PID_FILE = "ntfy.pid";
@@ -58,6 +58,7 @@ export async function acquirePid(dataDir, {
   readCmdlineFn,
   platform = process.platform,
 } = {}) {
+  await mkdir(dataDir, { recursive: true, mode: 0o700 });
   let existing = null;
   try {
     existing = await readPid(dataDir);

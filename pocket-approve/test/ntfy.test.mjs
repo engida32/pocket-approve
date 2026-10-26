@@ -377,6 +377,47 @@ test("createNtfy resolves a test reply without calling fleet.reply", async () =>
   assert.equal(audits[0].action, "test_notification");
 });
 
+test("createNtfy keeps a replied test ID isolated on a second delivery", async () => {
+  const dir = await tempDir();
+  const settings = createSettings();
+  const audits = [];
+  const replies = [];
+  const responses = [{ ok: true, status: 200, headers: new Headers() }];
+  const ntfy = createNtfy({
+    settings,
+    dataDir: dir,
+    audit: { append: (action, fields) => audits.push({ action, fields }) },
+    fleet: { reply: async (...args) => { replies.push(args); return { status: 200 }; } },
+    fetchImpl: fakeFetch(responses, []),
+    sleep: async () => {},
+    log: { error() {} },
+  });
+  const { id } = await ntfy.sendTest();
+  const sig = signReply(settings.secret, id, "once");
+  const message = JSON.stringify({ id, decision: "once", sig });
+  responses.push({
+    ok: true,
+    status: 200,
+    headers: new Headers(),
+    body: streamOf(
+      ["evt_test_first", "evt_test_second"].map((eventId) => JSON.stringify({
+        id: eventId,
+        time: 1793000000,
+        event: "message",
+        message,
+      })),
+    ),
+  });
+  const waiting = ntfy.waitForTest(id, 1000);
+  await ntfy.start();
+  await waiting;
+  await new Promise((resolve) => setTimeout(resolve, 30));
+  await ntfy.stop();
+  assert.deepEqual(replies, []);
+  assert.deepEqual(audits.map((entry) => entry.action), ["test_notification", "test_notification"]);
+  assert.ok(audits.every((entry) => entry.fields.requestId === id));
+});
+
 test("createNtfy stop rejects a pending test wait and clears its timer", async () => {
   const dir = await tempDir();
   const ntfy = createNtfy({
@@ -535,4 +576,45 @@ test("createNtfy reconnects after a stalled stream aborts", async () => {
   assert.ok(calls.length >= 2, `expected reconnect after a stall, got ${calls.length} calls`);
   assert.ok(waits.length >= 1);
   assert.ok(waits[0] > 0 && waits[0] <= 1000);
+});
+
+test("createNtfy stop interrupts a stream backoff sleep", async () => {
+  const dir = await tempDir();
+  const calls = [];
+  let sleeping = false;
+  const ntfy = createNtfy({
+    settings: createSettings(),
+    dataDir: dir,
+    audit: { append() {} },
+    fleet: { reply: async () => ({ status: 200 }) },
+    fetchImpl: fakeFetch([
+      { ok: false, status: 503, headers: new Headers() },
+    ], calls),
+    sleep: (ms, signal) => new Promise((resolve) => {
+      sleeping = true;
+      if (signal?.aborted) {
+        resolve();
+        return;
+      }
+      signal?.addEventListener("abort", resolve, { once: true });
+    }),
+    log: { error() {} },
+  });
+  await ntfy.start();
+  const deadline = Date.now() + 1000;
+  while (!sleeping && Date.now() < deadline) {
+    await new Promise((resolve) => setTimeout(resolve, 5));
+  }
+  assert.ok(sleeping, "expected the stream backoff to start sleeping");
+  const startedAt = Date.now();
+  let guardTimer = null;
+  const guard = new Promise((_, reject) => {
+    guardTimer = setTimeout(() => reject(new Error("stop did not cancel backoff")), 2000);
+  });
+  try {
+    await Promise.race([ntfy.stop(), guard]);
+  } finally {
+    clearTimeout(guardTimer);
+  }
+  assert.ok(Date.now() - startedAt < 500, `stop took ${Date.now() - startedAt}ms`);
 });

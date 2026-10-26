@@ -282,8 +282,26 @@ function retryAfterMs(response) {
   return Number.isFinite(seconds) && seconds >= 0 ? Math.min(seconds * 1000, 30000) : null;
 }
 
-function delay(sleep, ms) {
-  return sleep(ms);
+function delay(sleep, ms, signal) {
+  return sleep(ms, signal);
+}
+
+function defaultSleep(ms, signal) {
+  return new Promise((resolve) => {
+    if (signal?.aborted) {
+      resolve();
+      return;
+    }
+    const timer = setTimeout(resolve, ms);
+    signal?.addEventListener(
+      "abort",
+      () => {
+        clearTimeout(timer);
+        resolve();
+      },
+      { once: true },
+    );
+  });
 }
 
 export function createNtfy({
@@ -294,7 +312,7 @@ export function createNtfy({
   allowAlways = true,
   fetchImpl = fetch,
   log = console,
-  sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
+  sleep = defaultSleep,
   now = () => Date.now(),
   stallMs = 90000,
 } = {}) {
@@ -309,9 +327,20 @@ export function createNtfy({
   let loop = null;
   let queue = Promise.resolve();
   let buffer = "";
+  let backoff = null;
+  let wakeStop = null;
+  let stopPromise = null;
   const seenEvents = new Set();
   const tests = new Map();
   const testIds = new Set();
+  const MAX_TEST_IDS = 1000;
+
+  function rememberTestId(id) {
+    testIds.add(id);
+    while (testIds.size > MAX_TEST_IDS) {
+      testIds.delete(testIds.values().next().value);
+    }
+  }
 
   function enqueue(operation) {
     const result = queue.then(operation);
@@ -383,7 +412,6 @@ export function createNtfy({
 
   async function handleReply(reply) {
     if (testIds.has(reply.id)) {
-      testIds.delete(reply.id);
       audit.append("test_notification", {
         deviceId: "ntfy",
         requestId: reply.id,
@@ -467,6 +495,19 @@ export function createNtfy({
     }
   }
 
+  async function waitBackoff(ms) {
+    const local = new AbortController();
+    backoff = local;
+    try {
+      await Promise.race([
+        delay(sleep, ms, local.signal),
+        stopPromise ?? Promise.resolve(),
+      ]);
+    } finally {
+      if (backoff === local) backoff = null;
+    }
+  }
+
   async function run() {
     let attempt = 0;
     while (!stopped) {
@@ -478,7 +519,7 @@ export function createNtfy({
         const base = Math.min(60000, 1000 * 2 ** attempt);
         attempt += 1;
         const wait = error.retryAfter ?? Math.round(base / 2 + Math.random() * (base / 2));
-        await delay(sleep, wait);
+        await waitBackoff(wait);
       }
       if (!stopped) await new Promise((resolve) => setImmediate(resolve));
     }
@@ -489,17 +530,23 @@ export function createNtfy({
     async start() {
       if (!stopped) return;
       stopped = false;
+      stopPromise = new Promise((resolve) => {
+        wakeStop = resolve;
+      });
       loop = run();
     },
     async stop() {
       stopped = true;
+      const wake = wakeStop;
+      wakeStop = null;
+      wake?.();
+      backoff?.abort();
       controller?.abort();
       await loop;
       await queue;
       for (const [id, entry] of tests) {
         clearTimeout(entry.timer);
         tests.delete(id);
-        testIds.delete(id);
         entry.reject(new Error("ntfy stopped"));
       }
     },
@@ -511,7 +558,7 @@ export function createNtfy({
     publishNotice,
     async sendTest() {
       const id = `test:${randomBytes(16).toString("hex")}`;
-      testIds.add(id);
+      rememberTestId(id);
       try {
         await publish(buildTestMessage(settings, id));
       } catch (error) {
@@ -521,11 +568,10 @@ export function createNtfy({
       return { id };
     },
     waitForTest(id, timeoutMs = 120000) {
-      testIds.add(id);
+      rememberTestId(id);
       return new Promise((resolve, reject) => {
         const timer = setTimeout(() => {
           tests.delete(id);
-          testIds.delete(id);
           reject(new Error("timed out waiting for test reply"));
         }, timeoutMs);
         tests.set(id, {
@@ -534,7 +580,6 @@ export function createNtfy({
           resolve: () => {
             clearTimeout(timer);
             tests.delete(id);
-            testIds.delete(id);
             resolve();
           },
         });

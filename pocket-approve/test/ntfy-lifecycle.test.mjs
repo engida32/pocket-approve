@@ -26,6 +26,16 @@ test("acquirePid writes a 0600 file with a decimal PID", async () => {
   assert.equal(await readFile(pidPath(dir), "utf8"), "4242\n");
 });
 
+test("acquirePid creates a missing nested data directory", async () => {
+  const base = await tempDir();
+  const dir = join(base, "nested", "deeper", "data");
+  const pid = await acquirePid(dir, { pid: 4242, platform: "test" });
+  assert.equal(pid, 4242);
+  assert.equal((await stat(dir)).isDirectory(), true);
+  assert.equal((await stat(pidPath(dir))).mode & 0o777, 0o600);
+  assert.equal(await readFile(pidPath(dir), "utf8"), "4242\n");
+});
+
 test("acquirePid replaces a malformed PID file", async () => {
   const dir = await tempDir();
   await writeFile(pidPath(dir), "not-a-pid\n", { mode: 0o600 });
