@@ -4,6 +4,8 @@ Approve your coding agent from your pocket.
 
 Pocket Approve watches OpenCode permission requests, sends them to your phone and desktop, and sends your decision back to OpenCode. The terminal stays available as a fallback. Pocket Approve never approves anything on its own.
 
+[Project page](https://engida32.github.io/pocket-approve/)
+
 ![Status: v2](https://img.shields.io/badge/status-v2-brightgreen)
 ![Tests: 292 passing](https://img.shields.io/badge/tests-292%20passing-brightgreen)
 ![License: MIT](https://img.shields.io/badge/license-MIT-blue)
@@ -116,6 +118,35 @@ If OpenCode needs a password, set it before starting:
 OPENCODE_SERVER_PASSWORD=your-password npm start
 ```
 
+For a one-command local setup, use `npm run phone`. It writes the LAN config if needed, starts the server, and prints the certificate URL, app URL, pairing code, and QR code. It refuses proxy mode and servers that use a password, so use the setup and start commands above in those cases.
+
+## Open and use it
+
+### Phone with local Web Push
+
+1. On the phone, open `http://<your-lan-ip>:8081/` once and install the local CA certificate. The setup server only needs to run during this step.
+2. Open `https://<your-lan-ip>:8443/` on the phone. The app should show the pairing screen or the empty inbox.
+3. On the computer, run `npm run pair -- --label "My phone"` and scan the QR code. You can also open the printed pairing URL on the phone.
+4. Trigger a permission request in OpenCode. It should appear in the phone inbox and as a desktop notification.
+5. Tap Allow once, Always allow, or Deny. The command continues or stops in the OpenCode terminal.
+
+The CA install is one time per phone. If your LAN IP changes, rerun setup with the new `--host` and pair again. Do not expose the setup port to the internet.
+
+### Phone with ntfy
+
+1. Run `npm run connect` and scan the QR code with the ntfy app.
+2. Trigger a real OpenCode permission request, or run `npm run connect -- --test` for a test notification.
+3. Tap an action in the notification. Pocket Approve sends the signed reply back to OpenCode.
+4. Run `npm run disconnect` when you are done.
+
+### Check that it is running
+
+```bash
+npm run doctor
+```
+
+The doctor output reports the config, pairing state, and listener health without printing secrets. If a port is already in use, stop the old Pocket Approve process before starting a new one.
+
 ## Reverse proxy mode
 
 If you already run a reverse proxy with a trusted certificate:
@@ -144,6 +175,7 @@ Use `--server-dir` when OpenCode stores a different project directory. Use `--fo
 | `npm start` | Start the Pocket Approve server |
 | `npm run setup` | Create or replace the v2 config and certificates |
 | `npm run connect` | Start the ntfy bridge and show a pairing QR |
+| `npm run phone` | Set up LAN mode, start the server, and print a pairing QR |
 | `npm run disconnect` | Stop the ntfy bridge |
 | `npm run pair -- --label "My phone"` | Create a phone pairing code |
 | `npm run devices` | List paired devices |
