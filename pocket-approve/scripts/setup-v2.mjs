@@ -24,6 +24,7 @@ function usage() {
   --public-origin https://host
   --server id=url          repeatable
   --server-label id=label  repeatable
+  --server-dir id=/path    repeatable, scope a server to a project directory
   --host <lan-ip>          implies --mode lan
   --no-qr
   --force                  overwrite config (a timestamped backup is written)`);

@@ -1,6 +1,6 @@
 import { createHash, randomBytes } from "node:crypto";
 import { chmod, copyFile, mkdir, stat, writeFile } from "node:fs/promises";
-import { join } from "node:path";
+import { isAbsolute, join } from "node:path";
 import { DATA_DIR } from "./config.mjs";
 import { normalizeConfig, saveConfigV2, SCHEMA_VERSION } from "./config-v2.mjs";
 import { chooseHost, detectLanIp } from "../scripts/setup.mjs";
@@ -18,6 +18,15 @@ function pairValue(flag, value) {
   return [value.slice(0, at), value.slice(at + 1)];
 }
 
+function pairDirectory(value) {
+  const [id, directory] = pairValue("--server-dir", value);
+  if (!id) fail("--server-dir needs a server id");
+  if (!directory || !isAbsolute(directory)) {
+    fail("--server-dir needs an absolute project directory");
+  }
+  return [id, directory];
+}
+
 export function parseSetupArgs(argv = []) {
   const options = {
     mode: null,
@@ -25,6 +34,7 @@ export function parseSetupArgs(argv = []) {
     publicOrigin: null,
     servers: [],
     labels: {},
+    directories: {},
     qr: true,
     force: false,
   };
@@ -56,6 +66,12 @@ export function parseSetupArgs(argv = []) {
     } else if (arg === "--server-label") {
       const [id, label] = pairValue("--server-label", next());
       options.labels[id] = label;
+    } else if (arg === "--server-dir") {
+      const [id, directory] = pairDirectory(next());
+      options.directories[id] = directory;
+    } else if (arg.startsWith("--server-dir=")) {
+      const [id, directory] = pairDirectory(arg.slice(13));
+      options.directories[id] = directory;
     } else if (arg === "--no-qr") {
       options.qr = false;
     } else if (arg === "--force") {
@@ -89,7 +105,13 @@ export function buildSetupConfig({ options, previous = null, env = process.env, 
   const servers = serverEntries(options, previous, env).map((server) => ({
     ...server,
     label: options.labels[server.id] ?? server.label ?? server.id,
+    directory: options.directories?.[server.id] ?? server.directory ?? null,
   }));
+  for (const id of Object.keys(options.directories ?? {})) {
+    if (!servers.some((server) => server.id === id)) {
+      fail(`--server-dir refers to unknown server: ${id}`);
+    }
+  }
   const base = {
     mode: options.mode,
     trustProxy: true,

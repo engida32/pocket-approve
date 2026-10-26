@@ -44,6 +44,29 @@ test("list and reply hit the live-shaped endpoints", async (t) => {
   assert.deepEqual(posted, { reply: "once" });
 });
 
+test("client scopes list and reply to a project directory", async (t) => {
+  const urls = [];
+  const server = http.createServer((req, res) => {
+    urls.push(req.url);
+    if (req.method === "GET") return json(res, []);
+    if (req.method === "POST") return json(res, true);
+    res.writeHead(404).end();
+  });
+  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+  t.after(() => server.close());
+
+  const client = createClient({
+    baseUrl: `http://127.0.0.1:${server.address().port}`,
+    directory: "/tmp/notify project",
+  });
+  await client.list();
+  await client.reply("per_1", "reject");
+  assert.deepEqual(urls, [
+    "/permission?directory=%2Ftmp%2Fnotify%20project",
+    "/permission/per_1/reply?directory=%2Ftmp%2Fnotify%20project",
+  ]);
+});
+
 test("client sends no auth header without a password", async (t) => {
   const server = http.createServer((req, res) => {
     assert.equal(req.headers.authorization, undefined);

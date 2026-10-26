@@ -77,6 +77,53 @@ test("colliding raw ids become separate cards and replies are strict", async (t)
   assert.deepEqual(await fleet.reply("per_1", "once"), { status: 404, error: "unknown_request" });
 });
 
+test("one upstream can be polled per project directory", async (t) => {
+  const replies = [];
+  const server = http.createServer((req, res) => {
+    const url = new URL(req.url, "http://127.0.0.1");
+    const directory = url.searchParams.get("directory");
+    if (req.method === "GET" && url.pathname === "/permission") {
+      return json(res, 200, [{
+        id: directory === "/a" ? "per_a" : "per_b",
+        sessionID: "ses_1",
+        permission: "bash",
+        patterns: ["pwd"],
+        metadata: {},
+      }]);
+    }
+    if (req.method === "POST" && url.pathname === "/permission/per_b/reply") {
+      let body = "";
+      req.on("data", (chunk) => { body += chunk; });
+      req.on("end", () => {
+        replies.push({ directory, body: JSON.parse(body) });
+        json(res, 200, true);
+      });
+      return;
+    }
+    json(res, 404, { error: "not found" });
+  });
+  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+  t.after(() => server.close());
+  const url = `http://127.0.0.1:${server.address().port}`;
+  const config = normalizeConfig({
+    host: "127.0.0.1",
+    publicOrigin: "https://approve.example.com",
+    servers: [
+      { id: "a", label: "A", url, directory: "/a" },
+      { id: "b", label: "B", url, directory: "/b" },
+    ],
+  });
+  const fleet = createFleet({ config });
+  await fleet.init();
+  await fleet.refreshAll();
+  assert.deepEqual(
+    fleet.pending().requests.map((item) => item.id).sort(),
+    ["a:per_a", "b:per_b"],
+  );
+  assert.deepEqual(await fleet.reply("b:per_b", "reject"), { status: 200 });
+  assert.deepEqual(replies, [{ directory: "/b", body: { reply: "reject" } }]);
+});
+
 test("an offline server keeps its cache and does not block the other server", async (t) => {
   const a = await fakeServer(0);
   const deadPort = await freePort();

@@ -94,6 +94,7 @@ export function createFleet({
       username: server.username,
       password,
       timeoutMs: 5000,
+      directory: server.directory,
     });
     link.source = createOpenCodeSource(link.client);
     return link;

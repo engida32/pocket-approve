@@ -5,9 +5,15 @@ export function createClient({
   username = USERNAME,
   password = null,
   timeoutMs = 5000,
+  directory = null,
   fetchImpl = fetch,
 } = {}) {
   if (!baseUrl) throw new TypeError("baseUrl is required");
+  function scoped(path) {
+    if (!directory) return path;
+    const separator = path.includes("?") ? "&" : "?";
+    return `${path}${separator}directory=${encodeURIComponent(directory)}`;
+  }
   async function call(path, options = {}) {
     const headers = { ...(options.headers ?? {}) };
     if (password) {
@@ -41,8 +47,8 @@ export function createClient({
     }
   }
   return {
-    list: () => call("/permission"),
-    reply: (id, decision) => call(`/permission/${encodeURIComponent(id)}/reply`, {
+    list: () => call(scoped("/permission")),
+    reply: (id, decision) => call(scoped(`/permission/${encodeURIComponent(id)}/reply`), {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ reply: decision }),

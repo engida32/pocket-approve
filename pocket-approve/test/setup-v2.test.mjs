@@ -330,3 +330,43 @@ test("the LAN remedy example is executable end to end", { timeout: 30_000 }, asy
   assert.equal(written.servers[0].url, "http://127.0.0.1:4096");
   assert.equal(written.allowLegacyToken, false);
 });
+
+test("scopes server entries to project directories", () => {
+  const options = parseSetupArgs([
+    "--mode", "proxy",
+    "--public-origin", "https://approve.example.com",
+    "--server", "home=http://127.0.0.1:4096",
+    "--server", "scratch=http://127.0.0.1:4096",
+    "--server-dir", "home=/home/me/project",
+    "--server-dir=scratch=/tmp/scratch",
+  ]);
+  assert.deepEqual(options.directories, {
+    home: "/home/me/project",
+    scratch: "/tmp/scratch",
+  });
+  const config = buildSetupConfig({
+    options,
+    previous: null,
+    env: {},
+    vapid: VAPID,
+    pairingSecret: "pairing-secret-that-is-long-enough",
+  });
+  assert.deepEqual(
+    config.servers.map((server) => [server.id, server.directory]),
+    [["home", "/home/me/project"], ["scratch", "/tmp/scratch"]],
+  );
+  assert.throws(
+    () => parseSetupArgs(["--server-dir", "home=relative/path"]),
+    /absolute project directory/,
+  );
+  assert.throws(
+    () => buildSetupConfig({
+      options: { ...options, servers: [{ id: "home", url: "http://127.0.0.1:4096" }] },
+      previous: null,
+      env: {},
+      vapid: VAPID,
+      pairingSecret: "pairing-secret-that-is-long-enough",
+    }),
+    /unknown server: scratch/,
+  );
+});
