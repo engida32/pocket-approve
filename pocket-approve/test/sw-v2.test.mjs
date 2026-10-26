@@ -68,4 +68,6 @@ test("push parse failure falls back to a default notification", async () => {
   assert.doesNotMatch(pushBlock, /catch\s*\{\s*return;/);
   assert.match(pushBlock, /showNotification\(String\(payload\.title \|\| "Pocket Approve"\)\.slice\(0, 64\), options\)/);
   assert.match(pushBlock, /String\(payload\.summary \|\| "Open Pocket Approve to review\."\)\.slice\(0, 180\)/);
+  assert.match(pushBlock, /payload\.sessionID/);
+  assert.match(pushBlock, /requireInteraction: kind === "request"/);
 });

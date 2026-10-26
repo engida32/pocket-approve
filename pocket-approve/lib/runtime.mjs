@@ -99,6 +99,9 @@ export async function createRuntime({ config, dataDir = DATA_DIR, desktop = null
   const fleet = createFleet({
     config,
     log,
+    onReply: ({ id }) => {
+      try { desktopPort.close?.(id); } catch {}
+    },
     onChange: async (link) => {
       if (notifications) await notifications.announce(link);
     },

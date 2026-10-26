@@ -21,6 +21,7 @@ export function createClient({
     }
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), timeoutMs);
+    timer.unref?.();
     try {
       const response = await fetchImpl(new URL(path, baseUrl), {
         ...options,

@@ -17,15 +17,16 @@ function fakeSpawn({
   callStdout = null,
   throwOnCall = false,
   throwOnMonitor = false,
+  noMonitorStdout = false,
 } = {}) {
   const children = [];
   const spawnFn = (cmd, args) => {
     if (throwOnMonitor && cmd === "dbus-monitor") throw new Error("monitor spawn failed");
     if (throwOnCall && args[0] === "call") throw new Error("spawn failed");
     const child = new EventEmitter();
-    child.stdout = new PassThrough();
+    child.stdout = cmd === "dbus-monitor" && noMonitorStdout ? null : new PassThrough();
     child.stderr = new PassThrough();
-    child.kill = () => {};
+    child.kill = () => { child.killed = true; };
     child.args = args;
     child.cmd = cmd;
     children.push(child);
@@ -271,6 +272,26 @@ test("a monitor that cannot start fails closed", async () => {
     decision: null,
   });
   assert.equal(errors.length, 1);
+  desktop.stop();
+});
+
+test("a monitor without stdout is killed and replaced on the next notify", async () => {
+  const errors = [];
+  const { spawnFn, children } = fakeSpawn({ noMonitorStdout: true });
+  const desktop = createDesktop({ spawnFn, log: { error: (...args) => errors.push(args) } });
+
+  assert.deepEqual(await desktop.notify({ id: "per_7", title: "t", summary: "s" }), {
+    id: null,
+    decision: null,
+  });
+  const monitors = () => children.filter((child) => child.cmd === "dbus-monitor");
+  assert.equal(monitors().length, 1);
+  assert.equal(monitors()[0].killed, true);
+
+  await desktop.notify({ id: "per_8", title: "t", summary: "s" });
+  assert.equal(monitors().length, 2);
+  assert.equal(monitors()[1].killed, true);
+  assert.equal(errors.length, 2);
   desktop.stop();
 });
 

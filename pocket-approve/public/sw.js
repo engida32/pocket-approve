@@ -7,6 +7,12 @@ const ACTIONS = [
   { action: "review", title: "Review" },
 ];
 
+function shortSession(value) {
+  const clean = typeof value === "string" ? value.replace(/^ses_/, "").trim() : "";
+  if (!clean) return "";
+  return clean.length > 12 ? `${clean.slice(0, 12)}...` : clean;
+}
+
 function openDb() {
   return new Promise((resolve, reject) => {
     let request;
@@ -207,18 +213,23 @@ self.addEventListener("push", (event) => {
     const kind = payload.kind === "request" ? "request" : payload.kind === "digest" ? "digest" : "test";
     const body = String(payload.summary || "Open Pocket Approve to review.").slice(0, 180);
     const count = Number.isInteger(payload.count) ? payload.count : 1;
+    const session = kind === "request" ? shortSession(payload.sessionID) : "";
+    const detail = kind === "digest"
+      ? `${count} new permission requests`
+      : session ? `${body} | Session ${session}` : body;
     const options = {
-      body: kind === "digest" ? `${count} new permission requests` : body,
+      body: detail.slice(0, 220),
       icon: "/icon-192.png",
       tag: payload.id ? String(payload.id) : undefined,
       data: {
         kind,
         id: payload.id ?? null,
         serverId: payload.serverId ?? null,
+        sessionID: payload.sessionID ?? null,
         url: kind === "request" ? requestUrl(payload.id) : "/",
       },
       renotify: false,
-      requireInteraction: false,
+      requireInteraction: kind === "request",
       silent: false,
     };
     if (kind === "request") options.actions = ACTIONS;

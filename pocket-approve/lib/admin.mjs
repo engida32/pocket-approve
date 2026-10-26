@@ -19,6 +19,7 @@ export function createAdmin({
     throw new TypeError("socketPath, config, devices, pairing, push, and fleet are required");
   }
   let server = null;
+  const sockets = new Set();
 
   async function handle(message) {
     if (!message || typeof message !== "object") return { ok: false, error: "invalid_request" };
@@ -26,11 +27,12 @@ export function createAdmin({
       const label = typeof message.label === "string" && message.label.trim() ? message.label.trim() : "Device";
       const opened = await pairing.open(label);
       await audit?.append("pair", { result: "opened" });
+      const params = new URLSearchParams({ code: opened.code, label });
       return {
         ok: true,
         code: opened.code,
         expiresAt: opened.expiresAt,
-        url: `${config.publicOrigin}/pair#code=${opened.code}`,
+        url: `${config.publicOrigin}/pair#${params}`,
       };
     }
     if (message.command === "devices") {
@@ -75,6 +77,8 @@ export function createAdmin({
   async function start() {
     if (server) return;
     const created = createServer({ allowHalfOpen: true }, (socket) => {
+      sockets.add(socket);
+      socket.once("close", () => sockets.delete(socket));
       let data = "";
       let pending = false;
       socket.setEncoding("utf8");
@@ -129,8 +133,12 @@ export function createAdmin({
 
   async function stop() {
     if (!server) return;
-    await new Promise((resolve) => server.close(resolve));
+    const closing = server;
     server = null;
+    const done = new Promise((resolve) => closing.close(() => resolve()));
+    for (const socket of sockets) socket.destroy();
+    sockets.clear();
+    await done;
   }
 
   return { start, stop, handle };

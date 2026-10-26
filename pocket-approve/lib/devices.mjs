@@ -5,6 +5,51 @@ import { readPrivateJson, writePrivateJson } from "./store.mjs";
 
 const TOKEN_BYTES = 32;
 const LAST_SEEN_MS = 60_000;
+const TOKEN_HASH = /^sha256:[a-f0-9]{64}$/;
+const DEFAULT_SCOPES = ["read", "approve"];
+
+function isoOrNull(value) {
+  if (typeof value !== "string") return null;
+  return Number.isNaN(Date.parse(value)) ? null : value;
+}
+
+function normalizeDevice(item) {
+  if (!item || typeof item !== "object" || Array.isArray(item)) return null;
+  if (typeof item.id !== "string" || item.id.length === 0) return null;
+  if (typeof item.tokenHash !== "string" || !TOKEN_HASH.test(item.tokenHash)) return null;
+  const createdAt = item.createdAt == null ? null : isoOrNull(item.createdAt);
+  if (item.createdAt != null && createdAt === null) return null;
+  const revokedAt = item.revokedAt == null ? null : isoOrNull(item.revokedAt);
+  if (item.revokedAt != null && revokedAt === null) return null;
+  const scopes = Array.isArray(item.scopes)
+    ? item.scopes.filter((scope) => typeof scope === "string" && scope.length > 0)
+    : [];
+  const name = typeof item.name === "string" ? item.name.trim().slice(0, 64) : "";
+  return {
+    ...item,
+    id: item.id,
+    name: name || item.id,
+    tokenHash: item.tokenHash,
+    tokenPrefix: typeof item.tokenPrefix === "string" && item.tokenPrefix ? item.tokenPrefix : `pk_${item.id.slice(-6)}`,
+    createdAt,
+    lastSeenAt: isoOrNull(item.lastSeenAt) ?? createdAt,
+    revokedAt,
+    scopes: scopes.length > 0 ? scopes : [...DEFAULT_SCOPES],
+  };
+}
+
+function normalizeDevices(loaded) {
+  if (!Array.isArray(loaded)) return [];
+  const seen = new Set();
+  const devices = [];
+  for (const item of loaded) {
+    const device = normalizeDevice(item);
+    if (!device || seen.has(device.id)) continue;
+    seen.add(device.id);
+    devices.push(device);
+  }
+  return devices;
+}
 
 function hashesEqual(left, right) {
   if (typeof left !== "string" || typeof right !== "string") return false;
@@ -31,7 +76,11 @@ export function createDeviceStore({ dataDir, now = () => new Date(), log = conso
   async function init() {
     return enqueue(async () => {
       const loaded = await readPrivateJson(file, []);
-      devices = Array.isArray(loaded) ? loaded.filter((item) => item && typeof item.id === "string") : [];
+      devices = normalizeDevices(loaded);
+      if (!Array.isArray(loaded) || JSON.stringify(loaded) !== JSON.stringify(devices)) {
+        log?.warn?.("devices: repaired the device store; malformed records were dropped");
+        await writePrivateJson(file, devices);
+      }
       return devices;
     });
   }

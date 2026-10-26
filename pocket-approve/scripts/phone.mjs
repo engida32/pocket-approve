@@ -126,7 +126,7 @@ export async function main(argv = process.argv.slice(2)) {
     const pair = await running.runtime.pairing.open(options.label);
     const appUrl = config.publicOrigin;
     const caUrl = `http://${config.host}:${config.setupPort}/`;
-    const pairUrl = pairingUrl(appUrl, pair.code);
+    const pairUrl = pairingUrl(appUrl, pair.code, pair.label);
 
     console.log(`Pocket Approve is ready for ${config.host}.`);
     console.log(`  App:   ${appUrl}`);

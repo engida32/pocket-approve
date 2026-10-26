@@ -39,6 +39,7 @@ function harness(items) {
         return fresh;
       },
       observe: async () => {},
+      release: async () => {},
     },
     push: {
       send: async (payload, options) => { pushed.push({ payload, options }); return { sent: 1, failed: 0, removed: 0 }; },
@@ -46,7 +47,10 @@ function harness(items) {
     },
     devices: { list: () => [{ id: "dev_1", revokedAt: null }] },
     desktop: {
-      notify: async (item) => { desktop.push(item); return item.id.endsWith(":2") ? { decision: "reject" } : null; },
+      notify: async (item) => {
+        desktop.push(item);
+        return { id: item.id, decision: item.id.endsWith(":2") ? "reject" : null };
+      },
     },
     audit: { append: async () => {} },
   };
@@ -57,6 +61,7 @@ function harness(items) {
     dependencies,
     fleet: dependencies.fleet,
     seen: dependencies.seen,
+    seenIds: seen,
     audit: dependencies.audit,
   };
 }
@@ -79,6 +84,8 @@ test("new requests are announced once, capped, and routed on desktop action", as
   const { payload, options } = h.pushed[0];
   assert.equal(payload.kind, "request");
   assert.equal(payload.serverLabel, "Alpha");
+  assert.equal(payload.sessionID, "ses_1");
+  assert.equal(payload.tool, "bash");
   assert.equal(payload.title.length, 64);
   assert.equal(payload.summary.length, 140);
   assert.equal(options.deviceId, "dev_1");
@@ -219,6 +226,19 @@ test("the digest count is the total fleet pending count, not just the new ones",
   assert.match(h.pushed[0].payload.title, /11 new requests/);
 });
 
+test("a synchronous desktop failure does not count as a notification", async () => {
+  const h = harness([request("1")]);
+  h.dependencies.desktop.notify = () => {
+    throw new Error("desktop down");
+  };
+  h.dependencies.log = { error() {} };
+  const notifications = createNotifications(h.dependencies);
+  const result = await notifications.announce({ id: "alpha" });
+  assert.equal(result.desktop, 0);
+  assert.equal(result.pushes, 1);
+  assert.equal(h.pushed.length, 1);
+});
+
 test("a digest without a desktop notifier reports zero desktop attempts", async () => {
   const items = Array.from({ length: 11 }, (_, index) => request(String(index)));
   const h = harness(items);
@@ -355,6 +375,53 @@ test("a failed web push does not stop the rest of the poll", async () => {
   assert.deepEqual(attempts, ["alpha:1", "alpha:2", "alpha:3"]);
   assert.equal(result.pushes, 2);
   assert.equal(result.desktop, 3);
+});
+
+test("a resolved web push failure releases the request for the next poll", async () => {
+  const released = [];
+  const h = harness([request("1")]);
+  h.seen.release = async (ids) => released.push(...ids);
+  h.dependencies.push.send = async () => ({ sent: 0, failed: 1, removed: 0 });
+  h.dependencies.log = { error() {} };
+  const notifications = createNotifications(h.dependencies);
+  await notifications.announce({ id: "alpha" });
+  await flush();
+  assert.deepEqual(released, ["alpha:1"]);
+});
+
+test("a push retry does not repeat the desktop notification", async () => {
+  const h = harness([request("1")]);
+  h.seen.release = async (ids) => {
+    for (const id of ids) h.seenIds.delete(id);
+  };
+  let attempts = 0;
+  h.dependencies.push.send = async () => {
+    attempts += 1;
+    return attempts === 1 ? { sent: 0, failed: 1, removed: 0 } : { sent: 1, failed: 0, removed: 0 };
+  };
+  h.dependencies.log = { error() {} };
+  const notifications = createNotifications(h.dependencies);
+  const first = await notifications.announce({ id: "alpha" });
+  const second = await notifications.announce({ id: "alpha" });
+  assert.equal(first.desktop, 1);
+  assert.equal(second.desktop, 0);
+  assert.equal(h.desktop.length, 1);
+  assert.equal(attempts, 2);
+  assert.equal(second.pushes, 1);
+});
+
+test("a failed web push releases the request for the next poll", async () => {
+  const released = [];
+  const h = harness([request("1")]);
+  h.seen.release = async (ids) => released.push(...ids);
+  h.dependencies.push.send = async () => {
+    throw new Error("offline");
+  };
+  h.dependencies.log = { error() {} };
+  const notifications = createNotifications(h.dependencies);
+  await notifications.announce({ id: "alpha" });
+  await flush();
+  assert.deepEqual(released, ["alpha:1"]);
 });
 
 test("ntfy sendTest failure audits the ntfy device", async () => {

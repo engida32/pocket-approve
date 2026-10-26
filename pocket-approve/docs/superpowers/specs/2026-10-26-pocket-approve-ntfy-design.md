@@ -255,10 +255,10 @@ Changes:
   - Filter to the current server.
   - Take up to 20 fresh requests. Leave overflow unseen for the next poll.
   - For each fresh request, send a desktop notification and an ntfy message. There is no digest.
-  - Release the seen IDs for any request whose ntfy send fails after retries.
+  - Release the seen IDs for any request whose ntfy send fails after retries. Permanent failures are not released.
   - Return counts for desktop, ntfy, and pushes. `pushes` is zero in ntfy mode.
 - `sendTest` publishes through ntfy when configured and never calls Web Push.
-- The Web Push path remains exactly as it is today when `ntfy` is absent.
+- The Web Push path keeps its existing behavior when `ntfy` is absent. Later hardening added desktop deduplication across retries and release only on total delivery failure.
 
 The ntfy message is built from the full fleet item. `requestPayload` stays unchanged for Web Push.
 
@@ -289,7 +289,6 @@ Add:
 - `lib/push.mjs`
 - `lib/desktop.mjs`
 - `lib/fleet.mjs`
-- `lib/app.mjs`
 - `lib/config.mjs`
 - `scripts/setup.mjs`
 

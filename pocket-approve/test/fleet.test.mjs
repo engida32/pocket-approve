@@ -77,6 +77,22 @@ test("colliding raw ids become separate cards and replies are strict", async (t)
   assert.deepEqual(await fleet.reply("per_1", "once"), { status: 404, error: "unknown_request" });
 });
 
+test("a successful reply notifies the onReply hook", async (t) => {
+  const a = await fakeServer(0);
+  t.after(() => a.server.close());
+  const config = normalizeConfig({
+    host: "127.0.0.1",
+    publicOrigin: "https://approve.example.com",
+    servers: [{ id: "a", label: "A", url: a.url }],
+  });
+  const events = [];
+  const fleet = createFleet({ config, onReply: (event) => events.push(event) });
+  await fleet.init();
+  await fleet.refreshAll();
+  assert.deepEqual(await fleet.reply("a:per_1", "once"), { status: 200 });
+  assert.deepEqual(events, [{ id: "a:per_1", decision: "once", status: 200 }]);
+});
+
 test("one upstream can be polled per project directory", async (t) => {
   const replies = [];
   const server = http.createServer((req, res) => {

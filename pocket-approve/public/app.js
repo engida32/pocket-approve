@@ -2,7 +2,7 @@ const DB_NAME = "pocket-approve";
 const DB_VERSION = 2;
 const SESSION_KEY = "current";
 const LEGACY_TOKEN_KEY = "pocketApproveToken";
-const POLL_MS = 10_000;
+const POLL_MS = 5_000;
 const ERROR_POLL_MS = 20_000;
 
 const decisions = [
@@ -190,8 +190,12 @@ function renderSession() {
       els.pairCode.value = stored;
       sessionStorage.removeItem("pending-pair-code");
     }
+    const pendingName = sessionStorage.getItem("pending-device-name");
+    if (pendingName) {
+      if (!els.deviceName.value) els.deviceName.value = pendingName;
+      sessionStorage.removeItem("pending-device-name");
+    }
   }
-  if (paired) loadPending();
 }
 
 function pairFromHash() {
@@ -199,6 +203,8 @@ function pairFromHash() {
   const params = new URLSearchParams(location.hash.slice(1));
   const code = params.get("code");
   if (code) sessionStorage.setItem("pending-pair-code", code);
+  const label = params.get("label");
+  if (label?.trim()) sessionStorage.setItem("pending-device-name", label.trim().slice(0, 64));
   const legacy = params.get("token");
   history.replaceState(null, "", location.pathname + location.search);
   return { code, legacy };
@@ -345,9 +351,25 @@ function renderRequest(request) {
     actions.append(button);
   }
 
-  item.append(head, title, summary, actions);
+  item.append(head, title);
+  const session = shortSessionId(request.sessionID);
+  if (session) {
+    const meta = document.createElement("p");
+    meta.className = "request-meta";
+    meta.textContent = `Session ${session}`;
+    meta.title = request.sessionID;
+    item.append(meta);
+  }
+  item.append(summary, actions);
   item.setAttribute("aria-busy", state.busy.has(request.id) ? "true" : "false");
   return item;
+}
+
+function shortSessionId(value) {
+  if (typeof value !== "string") return "";
+  const clean = value.replace(/^ses_/, "").trim();
+  if (!clean) return "";
+  return clean.length > 12 ? `${clean.slice(0, 12)}...` : clean;
 }
 
 function relativeTime(value) {
@@ -678,25 +700,21 @@ async function sendTest() {
 async function unpair() {
   els.unpair.disabled = true;
   try {
-    const registration = state.registration ?? await setupWorker();
-    const subscription = await registration?.pushManager.getSubscription();
-    if (subscription) {
-      let unauthorized = false;
-      try {
-        await api("/api/unsubscribe", {
-          method: "POST",
-          body: JSON.stringify({ endpoint: subscription.endpoint }),
-        });
-      } catch (error) {
-        if (error.status === 401) unauthorized = true;
-      }
-      await subscription.unsubscribe().catch(() => {});
-      if (unauthorized) {
+    try {
+      await api("/api/revoke", { method: "POST", body: "{}" });
+    } catch (error) {
+      if (error.status === 401) {
         await handleUnauthorized();
         return;
       }
+      if (error.status !== 403 && error.status !== 404) {
+        els.pushStatus.textContent = "Could not disconnect this device. Check your connection and try again.";
+        return;
+      }
     }
-  } finally {
+    const registration = state.registration ?? await setupWorker();
+    const subscription = await registration?.pushManager.getSubscription();
+    if (subscription) await subscription.unsubscribe().catch(() => {});
     await clearSession();
     state.session = null;
     state.requests = [];
@@ -705,6 +723,8 @@ async function unpair() {
     renderSession();
     els.settings.close();
     els.pushStatus.textContent = "";
+    setStatus("Disconnected.");
+  } finally {
     els.unpair.disabled = false;
   }
 }

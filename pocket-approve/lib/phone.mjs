@@ -152,8 +152,10 @@ export function buildSetupArgs({ host, servers, force = false }) {
   return args;
 }
 
-export function pairingUrl(origin, code) {
-  return `${origin.replace(/\/+$/, "")}/pair#code=${encodeURIComponent(code)}`;
+export function pairingUrl(origin, code, label) {
+  const params = new URLSearchParams({ code });
+  if (typeof label === "string" && label.trim()) params.set("label", label.trim());
+  return `${origin.replace(/\/+$/, "")}/pair#${params}`;
 }
 
 export async function discoverSessions({ baseUrl = DEFAULT_OPENCODE, fetchImpl = fetch, timeoutMs = 5000 } = {}) {

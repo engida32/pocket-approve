@@ -293,6 +293,23 @@ test("createNtfy retries a 500 and honors 429 Retry-After", async () => {
   assert.ok(waits.includes(2000));
 });
 
+test("createNtfy does not retry a 400", async () => {
+  const dir = await tempDir();
+  const calls = [];
+  const ntfy = createNtfy({
+    settings: createSettings(),
+    dataDir: dir,
+    audit: { append() {} },
+    fleet: { reply: async () => ({ status: 200 }) },
+    fetchImpl: fakeFetch([{ ok: false, status: 400, headers: new Headers() }], calls),
+    sleep: async () => {},
+    log: { error() {} },
+  });
+  const item = { id: "alpha:1", sessionID: "ses_1", title: "Bash", summary: "ls" };
+  await assert.rejects(ntfy.publishRequest(item), /HTTP 400/);
+  assert.equal(calls.length, 1);
+});
+
 test("createNtfy verifies a reply, audits it, and advances the cursor once", async () => {
   const dir = await tempDir();
   const settings = createSettings();

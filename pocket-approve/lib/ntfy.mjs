@@ -369,8 +369,11 @@ export function createNtfy({
             continue;
           }
         }
-        throw new Error(`ntfy publish failed: HTTP ${response.status}`);
+        const failure = new Error(`ntfy publish failed: HTTP ${response.status}`);
+        failure.retryable = false;
+        throw failure;
       } catch (error) {
+        if (error.retryable === false) throw error;
         lastError = error;
         if (attempt < 2) await delay(sleep, attempt === 0 ? 250 : 1000);
       }

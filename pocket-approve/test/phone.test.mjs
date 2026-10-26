@@ -110,6 +110,10 @@ test("builds a pairing URL in the fragment", () => {
     pairingUrl("https://192.168.1.5:8443/", "ABCD-EFGH"),
     "https://192.168.1.5:8443/pair#code=ABCD-EFGH",
   );
+  assert.equal(
+    pairingUrl("https://192.168.1.5:8443/", "ABCD-EFGH", "Ada's iPhone"),
+    "https://192.168.1.5:8443/pair#code=ABCD-EFGH&label=Ada%27s+iPhone",
+  );
 });
 
 test("discovers sessions from the OpenCode API", async (t) => {

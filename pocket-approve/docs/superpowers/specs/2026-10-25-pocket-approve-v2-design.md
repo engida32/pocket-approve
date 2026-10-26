@@ -74,6 +74,8 @@ v2 fixes these as one coherent release. It does not add discovery, remote shell 
 
 These facts were read from the current tree. They are the contract the v2 work must not break by accident.
 
+> Cleanup note: the v1 `lib/state.mjs`, `lib/app.mjs`, and `lib/poller.mjs` files were removed after this audit. The line references below describe the historical baseline they were read from, not live paths.
+
 ### Server and configuration
 
 - `server.mjs:47` requires `config.host`, and `server.mjs:49` always calls `readTls(DATA_DIR)`. There is no non-TLS mode.
@@ -622,6 +624,10 @@ Request:
 
 Removes the endpoint only if it belongs to the calling device. Returns 204.
 
+### `POST /api/revoke`
+
+Requires a device token. Revokes the calling device first, then removes its push subscriptions. Returns `{ "ok": true, "subscriptionsRemoved": 1 }`. If cleanup fails after revocation, the token stays revoked and the route returns 500. A revoked token cannot call any authenticated route.
+
 ### `POST /api/test-notification`
 
 Sends only to the calling device's subscriptions. Payload id is `test:<uuid>` and is not a real request.
@@ -780,7 +786,7 @@ No server URL or credential is shown to the phone by default. A local `doctor` c
 3. Build a desktop notification with title `[Label] Title` and the namespaced id.
 4. For each subscription owned by an active device, send one push.
 5. If there are more than 10 new requests in one poll, send one digest instead of 10 pushes. The digest says "10 new requests" and deep-links to the inbox. Individual requests appear in the app.
-6. Persist `seen` after the notifications are attempted. A failed send does not cause an infinite re-notify loop. Health records the failure.
+6. Persist `seen` after the notifications are attempted. A failed send does not cause an infinite re-notify loop. Desktop alerts are deduplicated across retries, and seen IDs are released only when delivery failed for every target. Health records the failure.
 
 ### Payload
 
@@ -827,7 +833,7 @@ Rules:
 - No Allow action in the shade. Approval needs the app.
 - Tap on the body opens `/?request=<encoded id>`.
 - `tag` is the namespaced request id.
-- `renotify:false`, `requireInteraction:false`, `silent:false`.
+- `renotify:false`, `requireInteraction:true` for request notifications, `silent:false`.
 - `data.url` is the relative deep link.
 
 ### iOS notification
@@ -1331,6 +1337,8 @@ Exit: the definition of done is met and the v1 manual checklist is either passed
 ## 23. Sources
 
 Local, verified in this tree:
+
+> Cleanup note: `lib/state.mjs`, `lib/app.mjs`, and `lib/poller.mjs` were removed after this audit. This list records the historical tree.
 
 - `server.mjs`, `lib/config.mjs`, `lib/opencode.mjs`, `lib/adapters/opencode.mjs`, `lib/state.mjs`, `lib/poller.mjs`, `lib/app.mjs`, `lib/auth.mjs`, `lib/push.mjs`, `lib/desktop.mjs`, `lib/summarize.mjs`.
 - `public/app.js`, `public/sw.js`, `public/index.html`, `public/style.css`, `public/manifest.webmanifest`.

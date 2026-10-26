@@ -173,6 +173,27 @@ test("adapter preserves always and tool when OpenCode sends them", async () => {
   assert.equal(request.tool, "bash");
 });
 
+test("client unrefs its timeout timer", async (t) => {
+  const realSetTimeout = globalThis.setTimeout;
+  let unrefed = false;
+  globalThis.setTimeout = (fn, ms, ...args) => {
+    const timer = realSetTimeout(fn, ms, ...args);
+    const unref = timer.unref.bind(timer);
+    timer.unref = () => {
+      unrefed = true;
+      return unref();
+    };
+    return timer;
+  };
+  t.after(() => { globalThis.setTimeout = realSetTimeout; });
+  const client = createClient({
+    baseUrl: "http://127.0.0.1:9",
+    fetchImpl: async () => new Response("[]", { headers: { "content-type": "application/json" } }),
+  });
+  await client.list();
+  assert.equal(unrefed, true);
+});
+
 test("client aborts a slow upstream request", async (t) => {
   const server = http.createServer((_req, res) => setTimeout(() => json(res, []), 200));
   await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));

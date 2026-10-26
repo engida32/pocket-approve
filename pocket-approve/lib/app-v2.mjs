@@ -14,6 +14,7 @@ const WRITE_ROUTES = new Set([
   "/api/reply",
   "/api/subscribe",
   "/api/unsubscribe",
+  "/api/revoke",
   "/api/test-notification",
 ]);
 const KNOWN_API_PATHS = new Set([
@@ -267,6 +268,27 @@ export function createAppV2({
       await push.remove(endpoint);
       await audit?.append("unsubscribe", { deviceId: identity.device.id, result: "ok" });
       return new Response(null, { status: 204 });
+    }
+    if (path === "/api/revoke") {
+      if (identity.legacy) return fail(403, "device_required");
+      const wait = await rate(identity, "revoke", 5);
+      if (wait) return tooMany(wait);
+      const body = await readBody(request);
+      if (body.tooLarge) return fail(413, "body_too_large");
+      const changed = await devices.revoke(identity.device.id);
+      if (!changed) return fail(404, "device_not_found");
+      let subscriptionsRemoved = 0;
+      try {
+        subscriptionsRemoved = await push.removeByDevice(identity.device.id);
+      } catch (error) {
+        log?.error?.(`app: could not remove push subscriptions for ${identity.device.id}`, error);
+        return fail(500, "revoke_failed");
+      }
+      await audit?.append("revoke", {
+        deviceId: identity.device.id,
+        result: `self:${subscriptionsRemoved}`,
+      });
+      return json({ ok: true, id: identity.device.id, subscriptionsRemoved });
     }
     if (path === "/api/test-notification") {
       const wait = await rate(identity, "test", 10);

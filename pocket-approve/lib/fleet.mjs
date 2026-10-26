@@ -40,6 +40,7 @@ function publicRequest(link, raw, firstSeen) {
 export function createFleet({
   config,
   onChange = () => {},
+  onReply = () => {},
   log = console,
   now = Date.now,
   random = Math.random,
@@ -230,6 +231,19 @@ export function createFleet({
     return { requests: bounded, servers: servers(), fetchedAt: new Date(now()).toISOString() };
   }
 
+  function notifyReply(event) {
+    try {
+      const pending = onReply(event);
+      if (pending && typeof pending.catch === "function") {
+        pending.catch((error) => {
+          try { log?.warn?.(`fleet: onReply failed: ${error?.message ?? error}`); } catch {}
+        });
+      }
+    } catch (error) {
+      try { log?.warn?.(`fleet: onReply failed: ${error?.message ?? error}`); } catch {}
+    }
+  }
+
   async function reply(publicId, decision) {
     const parsed = parseNamespacedId(publicId);
     if (!parsed) return { status: 404, error: "unknown_request" };
@@ -241,11 +255,13 @@ export function createFleet({
     try {
       await link.source.reply(parsed.rawId, decision);
       forget(link, parsed.rawId);
+      notifyReply({ id: publicId, decision, status: 200 });
       return { status: 200 };
     } catch (error) {
       const status = Number(error?.status);
       if (status === 404 || status === 409) {
         forget(link, parsed.rawId);
+        notifyReply({ id: publicId, decision, status });
         return { status, error: status === 404 ? "not_found" : "conflict" };
       }
       if (status === 401 || status === 403) {

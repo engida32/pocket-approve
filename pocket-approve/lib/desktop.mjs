@@ -239,6 +239,12 @@ export function createDesktop({ spawnFn = spawn, log = console } = {}) {
     });
     if (!child.stdout) {
       logError("desktop: notification monitor has no output");
+      if (monitor === child) monitor = null;
+      try {
+        child.kill?.();
+      } catch (error) {
+        logError("desktop: could not stop the notification monitor", error);
+      }
       return false;
     }
     child.stdout.on("error", (error) => {

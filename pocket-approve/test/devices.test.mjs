@@ -124,3 +124,33 @@ test("data directory is private", async (t) => {
   assert.equal((await stat(dataDir)).mode & 0o777, 0o700);
   assert.equal((await stat(join(dataDir, "devices.json"))).mode & 0o777, 0o600);
 });
+
+test("init normalizes valid legacy records and drops malformed ones", async (t) => {
+  const dataDir = await dir(t);
+  const tokenHash = `sha256:${"a".repeat(64)}`;
+  await writePrivateJson(join(dataDir, "devices.json"), [
+    {
+      id: "dev_legacy",
+      name: "  Old phone  ",
+      tokenHash,
+      createdAt: "2026-01-01T00:00:00.000Z",
+    },
+    { id: "dev_bad" },
+    { id: "dev_nohash", name: "No hash", createdAt: "2026-01-01T00:00:00.000Z" },
+    { id: "dev_dup", name: "First", tokenHash, revokedAt: null },
+    { id: "dev_dup", name: "Second", tokenHash, revokedAt: null },
+    { id: 42, tokenHash },
+  ]);
+  const store = createDeviceStore({ dataDir });
+  await store.init();
+  assert.deepEqual(store.list().map((device) => device.id), ["dev_legacy", "dev_dup"]);
+  const [legacy] = store.list();
+  assert.equal(legacy.name, "Old phone");
+  assert.equal(legacy.revokedAt, null);
+  assert.deepEqual(legacy.scopes, ["read", "approve"]);
+  assert.equal(store.list()[1].name, "First");
+  const repaired = JSON.parse(await readFile(join(dataDir, "devices.json"), "utf8"));
+  assert.deepEqual(repaired.map((device) => device.id), ["dev_legacy", "dev_dup"]);
+  assert.equal(repaired[0].name, "Old phone");
+  assert.deepEqual(repaired[0].scopes, ["read", "approve"]);
+});

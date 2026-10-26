@@ -4,7 +4,7 @@ import { createServer } from "node:http";
 import { createAppV2 } from "../lib/app-v2.mjs";
 
 function makeApp(overrides = {}) {
-  const events = { added: [], removed: [], tests: [], replies: [] };
+  const events = { added: [], removed: [], removedByDevice: [], revoked: [], tests: [], replies: [] };
   const config = {
     mode: "proxy",
     host: "127.0.0.1",
@@ -15,7 +15,7 @@ function makeApp(overrides = {}) {
     vapid: { publicKey: "public-key", privateKey: "private-key", subject: "mailto:a@example.com" },
     servers: [{ id: "local", label: "Laptop", url: "http://127.0.0.1:4096" }],
   };
-  const device = { id: "dev_abc", name: "Phone", scopes: ["read", "approve"] };
+  const device = { id: "dev_abc", name: "Phone", scopes: ["read", "approve"], revokedAt: null };
   const fleet = {
     pending: () => ({
       requests: [{
@@ -51,8 +51,9 @@ function makeApp(overrides = {}) {
       const index = ownedSubscriptions.findIndex(
         (item) => item.endpoint === subscription.endpoint,
       );
-      if (index === -1) ownedSubscriptions.push(subscription);
-      else ownedSubscriptions[index] = subscription;
+      const owned = { ...subscription, deviceId };
+      if (index === -1) ownedSubscriptions.push(owned);
+      else ownedSubscriptions[index] = owned;
     },
     listForDevice: () => ownedSubscriptions.map((item) => ({ ...item })),
     remove: async (endpoint) => {
@@ -61,6 +62,14 @@ function makeApp(overrides = {}) {
       ownedSubscriptions.splice(index, 1);
       events.removed.push(endpoint);
       return true;
+    },
+    removeByDevice: async (deviceId) => {
+      events.removedByDevice.push(deviceId);
+      const before = ownedSubscriptions.length;
+      for (let i = ownedSubscriptions.length - 1; i >= 0; i -= 1) {
+        if (ownedSubscriptions[i].deviceId === deviceId) ownedSubscriptions.splice(i, 1);
+      }
+      return before - ownedSubscriptions.length;
     },
   };
   const pairing = {
@@ -71,9 +80,15 @@ function makeApp(overrides = {}) {
     },
   };
   const devices = {
-    findActive: async (token) => token === "good" ? device : token === "revoked" ? null : null,
+    findActive: async (token) => token === "good" && device.revokedAt === null ? device : null,
     touch: async () => {},
     create: async (name) => ({ device: { ...device, name }, token: "new-device-token" }),
+    revoke: async (id) => {
+      events.revoked.push(id);
+      if (id !== device.id || device.revokedAt !== null) return false;
+      device.revokedAt = "2026-10-25T12:00:02.000Z";
+      return true;
+    },
   };
   const notifications = {
     sendTest: async (deviceId) => { events.tests.push(deviceId); return { sent: 1, failed: 0, pruned: 0 }; },
@@ -259,6 +274,45 @@ test("subscribe is device-owned and unsubscribe only removes the caller's endpoi
     origin: "https://approve.example.com",
   });
   assert.equal(foreign.response.status, 404);
+});
+
+test("a paired device can revoke itself and drop its push subscriptions", async () => {
+  const { app, events } = makeApp();
+  const subscription = {
+    endpoint: "https://push.example/own",
+    expirationTime: null,
+    keys: { p256dh: "p", auth: "a" },
+  };
+  await call(app, "/api/subscribe", { method: "POST", body: { subscription } });
+  const result = await call(app, "/api/revoke", { method: "POST", body: {} });
+  assert.equal(result.response.status, 200);
+  assert.deepEqual(result.body, {
+    ok: true,
+    id: "dev_abc",
+    subscriptionsRemoved: 1,
+  });
+  assert.deepEqual(events.revoked, ["dev_abc"]);
+  assert.deepEqual(events.removedByDevice, ["dev_abc"]);
+  const after = await call(app, "/api/pending");
+  assert.equal(after.response.status, 401);
+});
+
+test("revoke stays revoked when push cleanup fails", async () => {
+  const { app, events } = makeApp({
+    push: {
+      publicKey: "public-key",
+      removeByDevice: async () => {
+        throw new Error("push store down");
+      },
+      listForDevice: () => [],
+    },
+    log: { error() {} },
+  });
+  const result = await call(app, "/api/revoke", { method: "POST", body: {} });
+  assert.equal(result.response.status, 500);
+  assert.deepEqual(events.revoked, ["dev_abc"]);
+  const after = await call(app, "/api/pending");
+  assert.equal(after.response.status, 401);
 });
 
 test("origin, body size, methods, unknown paths, and test notifications are constrained", async () => {

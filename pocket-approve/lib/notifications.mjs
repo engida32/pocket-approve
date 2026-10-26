@@ -29,6 +29,8 @@ function requestPayload(item, count) {
     id: item.id,
     serverId: item.serverId,
     serverLabel: cap(item.serverLabel, MAX_LABEL),
+    sessionID: cap(item.sessionID, 64),
+    tool: cap(item.tool ?? item.permission, 32),
     title: cap(item.title, MAX_TITLE),
     summary: cap(item.summary, MAX_SUMMARY),
     count,
@@ -36,8 +38,12 @@ function requestPayload(item, count) {
   };
 }
 
-function digestPayload(serverLabel, newCount, count) {
-  const id = `digest:${randomUUID()}`;
+function digestPayload(serverLabel, newCount, count, ids = []) {
+  const fingerprint = createHash("sha256")
+    .update(ids.map(String).sort().join("\n"))
+    .digest("base64url")
+    .slice(0, 24);
+  const id = `digest:${fingerprint}`;
   return {
     id,
     serverId: null,
@@ -99,34 +105,65 @@ export function createNotifications({
     } catch {}
   }
 
+  const desktopNotified = new Set();
+  function shouldNotifyDesktop(id) {
+    return !desktopNotified.has(id);
+  }
+  function markDesktopNotified(id) {
+    desktopNotified.add(id);
+    if (desktopNotified.size > 1000) {
+      desktopNotified.delete(desktopNotified.values().next().value);
+    }
+  }
+
+  async function releaseSeen(ids) {
+    try {
+      await seen.release(ids);
+    } catch (error) {
+      logError("notifications: could not release seen ids", error);
+    }
+  }
+
   async function pushToDevices(payload) {
     const active = devices.list().filter((device) => device && device.revokedAt === null);
-    let pushes = 0;
+    let sent = 0;
+    let failed = 0;
     for (const device of active) {
       const result = await push.send(payload, {
         deviceId: device.id,
         options: optionsFor(payload),
       });
-      pushes += result.sent;
+      sent += Number(result?.sent) || 0;
+      failed += Number(result?.failed) || 0;
     }
     const legacy = push.listForDevice(null);
     if (legacy.length > 0) {
       const result = await push.send(payload, { options: optionsFor(payload) });
-      pushes += result.sent;
+      sent += Number(result?.sent) || 0;
+      failed += Number(result?.failed) || 0;
     }
-    return pushes;
+    return { sent, failed };
   }
 
-  function notifyDesktop(item, title, summary) {
+  function notifyDesktop(item, title, summary, { actions = true } = {}) {
     if (typeof desktop?.notify !== "function") return false;
     let pending;
     try {
-      pending = desktop.notify({ id: item.id, title, summary });
+      pending = desktop.notify({
+        id: item.id,
+        title,
+        summary,
+        ...(actions ? {} : { actions: false }),
+      });
     } catch (error) {
       logError(`notifications: desktop failed for ${item.id}`, error);
-      return true;
+      return false;
     }
-    Promise.resolve(pending)
+    if (!pending || typeof pending !== "object") return false;
+    if (typeof pending.then !== "function") {
+      return pending.id !== null && pending.id !== undefined;
+    }
+    pending
       .then(async (answer) => {
         if (!answer || !DECISIONS.has(answer.decision)) return;
         try {
@@ -159,13 +196,19 @@ export function createNotifications({
       let ntfyCount = 0;
       for (const item of fresh) {
         const title = desktopTitle(item);
-        if (await notifyDesktop(item, title, item.summary)) desktopCount += 1;
+        if (
+          shouldNotifyDesktop(item.id) &&
+          (await notifyDesktop(item, title, item.summary))
+        ) {
+          markDesktopNotified(item.id);
+          desktopCount += 1;
+        }
         try {
           await ntfy.publishRequest(item, { count: totalPending });
           ntfyCount += 1;
         } catch (error) {
-          log.error?.(`ntfy publish failed for ${item.id}: ${error.message}`);
-          await seen.release([item.id]);
+          logError(`notifications: ntfy publish failed for ${item.id}`, error);
+          if (error.retryable !== false) await releaseSeen([item.id]);
         }
       }
       return { desktop: desktopCount, pushes: 0, digest: false, ntfy: ntfyCount };
@@ -177,33 +220,33 @@ export function createNotifications({
     const label = link?.label ?? fresh[0]?.serverLabel ?? "";
 
     if (fresh.length > DIGEST_THRESHOLD) {
-      const payload = shrink(digestPayload(label, fresh.length, totalPending));
+      const freshIds = fresh.map((item) => item.id);
+      const payload = shrink(digestPayload(label, fresh.length, totalPending, freshIds));
       let pushes = 0;
       if (!fits(payload)) {
         logError("notifications: digest payload exceeds the body limit; skipping push");
       } else {
         try {
-          pushes = await pushToDevices(payload);
+          const result = await pushToDevices(payload);
+          pushes = result.sent;
+          if (result.failed > 0 && result.sent === 0) await releaseSeen(freshIds);
         } catch (error) {
           logError("notifications: digest push failed", error);
+          await releaseSeen(freshIds);
         }
       }
       let notes = 0;
-      if (typeof desktop?.notify === "function") {
-        try {
-          const pending = desktop.notify({
-            id: payload.id,
-            title: payload.title,
-            summary: payload.summary,
-            actions: false,
-          });
-          notes = 1;
-          Promise.resolve(pending).catch((error) =>
-            logError("notifications: digest desktop failed", error),
-          );
-        } catch (error) {
-          logError("notifications: digest desktop failed", error);
-        }
+      if (
+        shouldNotifyDesktop(payload.id) &&
+        notifyDesktop(
+          { id: payload.id, serverId: null },
+          payload.title,
+          payload.summary,
+          { actions: false },
+        )
+      ) {
+        markDesktopNotified(payload.id);
+        notes = 1;
       }
       return { desktop: notes, pushes, digest: true };
     }
@@ -212,15 +255,24 @@ export function createNotifications({
     let pushes = 0;
     for (const item of fresh) {
       const payload = shrink(requestPayload(item, totalPending));
-      if (notifyDesktop(item, desktopTitle(item), payload.summary)) notes += 1;
+      if (
+        shouldNotifyDesktop(item.id) &&
+        notifyDesktop(item, desktopTitle(item), payload.summary)
+      ) {
+        markDesktopNotified(item.id);
+        notes += 1;
+      }
       if (!fits(payload)) {
         logError(`notifications: payload for ${item.id} exceeds the body limit; skipping push`);
         continue;
       }
       try {
-        pushes += await pushToDevices(payload);
+        const result = await pushToDevices(payload);
+        pushes += result.sent;
+        if (result.failed > 0 && result.sent === 0) await releaseSeen([item.id]);
       } catch (error) {
         logError(`notifications: push failed for ${item.id}`, error);
+        await releaseSeen([item.id]);
       }
     }
     return { desktop: notes, pushes, digest: false };

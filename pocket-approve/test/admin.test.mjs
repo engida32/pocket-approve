@@ -49,7 +49,7 @@ test("admin socket is private and pairs through the same code store", async (t) 
   const pair = await send(socketPath, { command: "pair", label: "Ada" });
   assert.equal(pair.ok, true);
   assert.equal(pair.code, "ABCD-EFGH");
-  assert.equal(pair.url, "https://approve.example.com/pair#code=ABCD-EFGH");
+  assert.equal(pair.url, "https://approve.example.com/pair#code=ABCD-EFGH&label=Ada");
   assert.deepEqual(opened, ["Ada"]);
   const unknown = await send(socketPath, { command: "shell" });
   assert.equal(unknown.ok, false);
@@ -121,6 +121,46 @@ test("start retries after a failed listen and stop stays safe", async (t) => {
   assert.deepEqual(devices.devices, []);
 });
 
+test("stop destroys clients that keep the admin socket open", async (t) => {
+  const dir = await temp(t);
+  const socketPath = join(dir, "admin.sock");
+  const admin = createAdmin({
+    socketPath,
+    config: {
+      mode: "proxy",
+      publicOrigin: "https://approve.example.com",
+      servers: [{ id: "local", label: "Laptop", url: "http://127.0.0.1:4096" }],
+      vapid: { publicKey: "pub" },
+      pairingSecret: "12345678901234567890",
+    },
+    devices: { list: () => [], activeCount: () => 0 },
+    pairing: { open: async () => ({ code: "ABCD-EFGH", expiresAt: "x" }) },
+    push: { removeByDevice: async () => 0 },
+    fleet: { servers: () => [] },
+    audit: { append: async () => {} },
+  });
+  await admin.start();
+  const socket = connect(socketPath);
+  await new Promise((resolve, reject) => {
+    socket.once("connect", resolve);
+    socket.once("error", reject);
+  });
+  const closed = new Promise((resolve) => socket.once("close", resolve));
+  let timer;
+  try {
+    await Promise.race([
+      admin.stop(),
+      new Promise((_, reject) => {
+        timer = setTimeout(() => reject(new Error("stop did not destroy the open client")), 500);
+      }),
+    ]);
+    await closed;
+  } finally {
+    clearTimeout(timer);
+    socket.destroy();
+  }
+});
+
 test("half-closed client still receives a delayed pair response", async (t) => {
   const dir = await temp(t);
   const socketPath = join(dir, "admin.sock");
@@ -171,5 +211,5 @@ test("half-closed client still receives a delayed pair response", async (t) => {
   });
   assert.equal(result.ok, true);
   assert.equal(result.code, "ABCD-EFGH");
-  assert.equal(result.url, "https://approve.example.com/pair#code=ABCD-EFGH");
+  assert.equal(result.url, "https://approve.example.com/pair#code=ABCD-EFGH&label=Half+close");
 });
