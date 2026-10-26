@@ -211,3 +211,168 @@ test("buildRequestMessage caps non-ASCII titles at 64 bytes without splitting ch
   assert.ok(Buffer.byteLength(message.title) <= 64);
   assert.equal(message.title, Buffer.from(message.title, "utf8").toString("utf8"));
 });
+
+import { createNdjsonParser } from "../lib/ntfy.mjs";
+import { createNtfy } from "../lib/ntfy.mjs";
+import { ReadableStream } from "node:stream/web";
+
+test("createNdjsonParser handles split chunks, multiple lines, and malformed lines", () => {
+  const events = [];
+  const parser = createNdjsonParser((event) => events.push(event));
+  parser.push('{"event":"open","id":"a"}\n{"event":"keep');
+  parser.push('alive","id":"b"}\n\n{"event":"message","id":"c","message":"hi"}\n');
+  parser.flush();
+  assert.deepEqual(events.map((event) => event.event), ["open", "keepalive", "message"]);
+  assert.equal(events[2].message, "hi");
+
+  const malformed = [];
+  const second = createNdjsonParser((event) => malformed.push(event));
+  second.push("not json\n");
+  assert.equal(malformed[0].event, "malformed");
+});
+
+function streamOf(lines) {
+  const encoder = new TextEncoder();
+  return new ReadableStream({
+    start(controller) {
+      for (const line of lines) controller.enqueue(encoder.encode(`${line}\n`));
+      controller.close();
+    },
+  });
+}
+
+function fakeFetch(responses, calls) {
+  return async (url, init) => {
+    calls.push({ url: String(url), init });
+    const next = responses.shift();
+    if (!next) return { ok: true, status: 200, headers: new Headers() };
+    if (typeof next === "function") return next(url, init);
+    return next;
+  };
+}
+
+test("createNtfy publishes a signed request", async () => {
+  const dir = await tempDir();
+  const settings = createSettings();
+  const calls = [];
+  const ntfy = createNtfy({
+    settings,
+    dataDir: dir,
+    audit: { append() {} },
+    fleet: { reply: async () => ({ status: 200 }) },
+    fetchImpl: fakeFetch([{ ok: true, status: 200, headers: new Headers() }], calls),
+    sleep: async () => {},
+    log: { error() {} },
+  });
+  await ntfy.publishRequest(item);
+  assert.equal(calls.length, 1);
+  const body = JSON.parse(calls[0].init.body);
+  assert.equal(body.topic, settings.outTopic);
+  assert.equal(body.actions.length, 3);
+});
+
+test("createNtfy retries a 500 and honors 429 Retry-After", async () => {
+  const dir = await tempDir();
+  const calls = [];
+  const waits = [];
+  const ntfy = createNtfy({
+    settings: createSettings(),
+    dataDir: dir,
+    audit: { append() {} },
+    fleet: { reply: async () => ({ status: 200 }) },
+    fetchImpl: fakeFetch([
+      { ok: false, status: 500, headers: new Headers() },
+      { ok: false, status: 429, headers: new Headers({ "Retry-After": "2" }) },
+      { ok: true, status: 200, headers: new Headers() },
+    ], calls),
+    sleep: async (ms) => waits.push(ms),
+    log: { error() {} },
+  });
+  await ntfy.publishRequest(item);
+  assert.equal(calls.length, 3);
+  assert.ok(waits.includes(2000));
+});
+
+test("createNtfy verifies a reply, audits it, and advances the cursor once", async () => {
+  const dir = await tempDir();
+  const settings = createSettings();
+  const sig = signReply(settings.secret, "alpha:req_1", "once");
+  const reply = JSON.stringify({ id: "alpha:req_1", decision: "once", sig });
+  const event = JSON.stringify({ id: "evt_1", time: 1793000000, event: "message", topic: settings.replyTopic, message: reply });
+  const calls = [];
+  const replies = [];
+  const audits = [];
+  const ntfy = createNtfy({
+    settings,
+    dataDir: dir,
+    audit: { append: (action, fields) => audits.push({ action, fields }) },
+    fleet: { reply: async (...args) => { replies.push(args); return { status: 200 }; } },
+    fetchImpl: fakeFetch([
+      { ok: true, status: 200, headers: new Headers(), body: streamOf([event, event]) },
+    ], calls),
+    sleep: async () => {},
+    log: { error() {} },
+  });
+  await ntfy.start();
+  await new Promise((resolve) => setTimeout(resolve, 30));
+  await ntfy.stop();
+  assert.deepEqual(replies, [["alpha:req_1", "once"]]);
+  assert.equal(audits[0].action, "reply");
+  assert.equal(audits[0].fields.deviceId, "ntfy");
+  assert.equal(settings.lastEventId, "evt_1");
+  assert.match(await readFile(join(dir, "ntfy.json"), "utf8"), /"lastEventId": "evt_1"/);
+});
+
+test("createNtfy ignores a forged reply and never calls fleet.reply", async () => {
+  const dir = await tempDir();
+  const settings = createSettings();
+  const event = JSON.stringify({
+    id: "evt_bad",
+    time: 1793000000,
+    event: "message",
+    message: JSON.stringify({ id: "alpha:req_1", decision: "once", sig: "bad" }),
+  });
+  const replies = [];
+  const ntfy = createNtfy({
+    settings,
+    dataDir: dir,
+    audit: { append() {} },
+    fleet: { reply: async (...args) => { replies.push(args); return { status: 200 }; } },
+    fetchImpl: fakeFetch([{ ok: true, status: 200, body: streamOf([event]) }], []),
+    sleep: async () => {},
+    log: { error() {} },
+  });
+  await ntfy.start();
+  await new Promise((resolve) => setTimeout(resolve, 30));
+  await ntfy.stop();
+  assert.deepEqual(replies, []);
+  assert.equal(settings.lastEventId, "evt_bad");
+});
+
+test("createNtfy resolves a test reply without calling fleet.reply", async () => {
+  const dir = await tempDir();
+  const settings = createSettings();
+  const id = "test:123";
+  const sig = signReply(settings.secret, id, "once");
+  const event = JSON.stringify({
+    id: "evt_test",
+    time: 1793000000,
+    event: "message",
+    message: JSON.stringify({ id, decision: "once", sig }),
+  });
+  const audits = [];
+  const ntfy = createNtfy({
+    settings,
+    dataDir: dir,
+    audit: { append: (action, fields) => audits.push({ action, fields }) },
+    fleet: { reply: async () => { throw new Error("must not reply"); } },
+    fetchImpl: fakeFetch([{ ok: true, status: 200, body: streamOf([event]) }], []),
+    sleep: async () => {},
+    log: { error() {} },
+  });
+  const waiting = ntfy.waitForTest(id, 1000);
+  await ntfy.start();
+  await waiting;
+  await ntfy.stop();
+  assert.equal(audits[0].action, "test_notification");
+});

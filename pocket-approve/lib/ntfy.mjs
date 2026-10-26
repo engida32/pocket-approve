@@ -249,3 +249,274 @@ export function buildTestMessage(settings, id) {
     actions: [action(settings, { id }, "Send test reply", "once")],
   });
 }
+
+export function createNdjsonParser(onEvent) {
+  if (typeof onEvent !== "function") throw new TypeError("onEvent must be a function");
+  let buffer = "";
+  function emit(line) {
+    if (line.trim() === "") return;
+    try {
+      onEvent(JSON.parse(line));
+    } catch {
+      onEvent({ event: "malformed", line });
+    }
+  }
+  return {
+    push(chunk) {
+      buffer += String(chunk);
+      const lines = buffer.split("\n");
+      buffer = lines.pop() ?? "";
+      for (const line of lines) emit(line);
+    },
+    flush() {
+      if (buffer !== "") emit(buffer);
+      buffer = "";
+    },
+  };
+}
+
+function retryAfterMs(response) {
+  const value = response?.headers?.get?.("Retry-After");
+  const seconds = Number(value);
+  return Number.isFinite(seconds) && seconds >= 0 ? Math.min(seconds * 1000, 30000) : null;
+}
+
+function delay(sleep, ms) {
+  return sleep(ms);
+}
+
+export function createNtfy({
+  settings,
+  dataDir,
+  audit,
+  fleet,
+  allowAlways = true,
+  fetchImpl = fetch,
+  log = console,
+  sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
+  now = () => Date.now(),
+} = {}) {
+  if (!settings) throw new TypeError("settings is required");
+  if (typeof dataDir !== "string" || dataDir === "") throw new TypeError("dataDir is required");
+  if (!audit || typeof audit.append !== "function") throw new TypeError("audit is required");
+  if (!fleet || typeof fleet.reply !== "function") throw new TypeError("fleet is required");
+  if (typeof fetchImpl !== "function") throw new TypeError("fetchImpl must be a function");
+
+  let stopped = true;
+  let controller = null;
+  let loop = null;
+  let queue = Promise.resolve();
+  let buffer = "";
+  const seenEvents = new Set();
+  const tests = new Map();
+
+  function enqueue(operation) {
+    const result = queue.then(operation);
+    queue = result.then(() => undefined, () => undefined);
+    return result;
+  }
+
+  async function publish(message) {
+    let lastError = null;
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+      try {
+        const response = await fetchImpl(settings.baseUrl, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(message),
+          signal: AbortSignal.timeout(15000),
+        });
+        if (response.ok) return;
+        if (response.status === 429 || response.status >= 500) {
+          lastError = new Error(`ntfy publish failed: HTTP ${response.status}`);
+          if (attempt < 2) {
+            const wait = retryAfterMs(response) ?? (attempt === 0 ? 250 : 1000);
+            await delay(sleep, wait);
+            continue;
+          }
+        }
+        throw new Error(`ntfy publish failed: HTTP ${response.status}`);
+      } catch (error) {
+        lastError = error;
+        if (attempt < 2) await delay(sleep, attempt === 0 ? 250 : 1000);
+      }
+    }
+    throw lastError ?? new Error("ntfy publish failed");
+  }
+
+  function remember(event) {
+    if (typeof event?.id !== "string" || event.id === "") return false;
+    if (seenEvents.has(event.id)) return false;
+    seenEvents.add(event.id);
+    if (seenEvents.size > 500) seenEvents.delete(seenEvents.values().next().value);
+    return true;
+  }
+
+  async function persistCursor(event) {
+    settings.lastEventId = event.id;
+    settings.lastEventAt = Number.isFinite(event.time)
+      ? new Date(event.time * 1000).toISOString()
+      : new Date(now()).toISOString();
+    try {
+      Object.assign(settings, await saveSettings(dataDir, settings));
+    } catch (error) {
+      log.error?.(`failed to save ntfy cursor: ${error.message}`);
+    }
+  }
+
+  async function publishNotice(text) {
+    try {
+      await publish({
+        topic: settings.outTopic,
+        title: "Pocket Approve could not apply a decision",
+        message: text,
+        priority: 4,
+        tags: ["warning"],
+      });
+    } catch (error) {
+      log.error?.(`failed to publish ntfy notice: ${error.message}`);
+    }
+  }
+
+  async function handleReply(reply) {
+    if (reply.id.startsWith("test:")) {
+      audit.append("test_notification", {
+        deviceId: "ntfy",
+        requestId: reply.id,
+        result: "replied",
+      });
+      const waiter = tests.get(reply.id);
+      if (waiter) {
+        tests.delete(reply.id);
+        waiter.resolve();
+      }
+      return;
+    }
+    let result;
+    try {
+      result = await fleet.reply(reply.id, reply.decision);
+    } catch (error) {
+      await publishNotice("Decision did not reach OpenCode. Use the desktop notification or terminal.");
+      return;
+    }
+    const serverId = reply.id.includes(":") ? reply.id.slice(0, reply.id.indexOf(":")) : null;
+    audit.append("reply", {
+      deviceId: "ntfy",
+      serverId,
+      requestId: reply.id,
+      result: String(result.status),
+    });
+    if (result.status === 200 || result.status === 404 || result.status === 409) return;
+    await publishNotice("Decision did not reach OpenCode. Use the desktop notification or terminal.");
+  }
+
+  function handleEvent(event) {
+    if (!event || typeof event !== "object") return;
+    if (event.event === "open" || event.event === "keepalive") return;
+    if (event.event !== "message") return;
+    const freshEvent = remember(event);
+    if (!freshEvent) return;
+    enqueue(async () => {
+      await persistCursor(event);
+      const reply = parseReply(settings, event.message);
+      if (!reply) {
+        log.error?.("ignored malformed or unsigned ntfy reply");
+        return;
+      }
+      await handleReply(reply);
+    });
+  }
+
+  async function streamOnce() {
+    const url = new URL(`${settings.baseUrl}/${settings.replyTopic}/json`);
+    url.searchParams.set("since", settings.lastEventId ?? "10m");
+    controller = new AbortController();
+    const response = await fetchImpl(url, {
+      headers: { Accept: "application/x-ndjson" },
+      signal: controller.signal,
+    });
+    if (!response.ok) {
+      const error = new Error(`ntfy stream failed: HTTP ${response.status}`);
+      error.retryAfter = retryAfterMs(response);
+      throw error;
+    }
+    const reader = response.body.getReader();
+    const decoder = new TextDecoder();
+    const parser = createNdjsonParser((event) => handleEvent(event));
+    let watchdog = null;
+    const touch = () => {
+      if (watchdog) clearTimeout(watchdog);
+      watchdog = setTimeout(() => controller?.abort(), 90000);
+    };
+    touch();
+    try {
+      while (!stopped) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        touch();
+        parser.push(decoder.decode(value, { stream: true }));
+      }
+      parser.flush();
+    } finally {
+      if (watchdog) clearTimeout(watchdog);
+      reader.releaseLock?.();
+    }
+  }
+
+  async function run() {
+    let attempt = 0;
+    while (!stopped) {
+      try {
+        await streamOnce();
+        attempt = 0;
+      } catch (error) {
+        if (stopped || error.name === "AbortError") break;
+        const base = Math.min(60000, 1000 * 2 ** attempt);
+        attempt += 1;
+        const wait = error.retryAfter ?? Math.round(base / 2 + Math.random() * (base / 2));
+        await delay(sleep, wait);
+      }
+      if (!stopped) await new Promise((resolve) => setImmediate(resolve));
+    }
+  }
+
+  return {
+    settings,
+    async start() {
+      if (!stopped) return;
+      stopped = false;
+      loop = run();
+    },
+    async stop() {
+      stopped = true;
+      controller?.abort();
+      await loop;
+      await queue;
+    },
+    async publishRequest(request, options = {}) {
+      const message = buildRequestMessage(request, settings, { allowAlways, ...options });
+      await publish(message);
+      return message;
+    },
+    publishNotice,
+    async sendTest() {
+      const id = `test:${randomBytes(16).toString("hex")}`;
+      await publish(buildTestMessage(settings, id));
+      return { id };
+    },
+    waitForTest(id, timeoutMs = 120000) {
+      return new Promise((resolve, reject) => {
+        const timer = setTimeout(() => {
+          tests.delete(id);
+          reject(new Error("timed out waiting for test reply"));
+        }, timeoutMs);
+        tests.set(id, {
+          resolve: () => {
+            clearTimeout(timer);
+            resolve();
+          },
+        });
+      });
+    },
+  };
+}
