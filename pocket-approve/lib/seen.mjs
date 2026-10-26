@@ -89,6 +89,24 @@ export function createSeenStore({
     });
   }
 
+  async function release(ids) {
+    return enqueue(async () => {
+      if (!initialized) await load();
+      const next = Object.assign(Object.create(null), records);
+      let changed = false;
+      for (const id of Array.isArray(ids) ? ids : []) {
+        if (typeof id !== "string" || id === "") continue;
+        if (Object.hasOwn(next, id)) {
+          delete next[id];
+          changed = true;
+        }
+      }
+      if (!changed) return;
+      records = next;
+      await writePrivateJson(file, records);
+    });
+  }
+
   async function observe(activeIds) {
     const active = activeSet(activeIds);
     return enqueue(async () => {
@@ -128,5 +146,6 @@ export function createSeenStore({
     observe,
     has: (id) => typeof id === "string" && Object.hasOwn(records, id),
     size: () => Object.keys(records).length,
+    release,
   };
 }

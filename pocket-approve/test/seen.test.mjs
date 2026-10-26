@@ -190,3 +190,14 @@ test("rejects invalid construction options", () => {
   assert.throws(() => createSeenStore({ dataDir: "/tmp/pa-seen", absentTtlMs: "100" }), TypeError);
   assert.throws(() => createSeenStore({ dataDir: "/tmp/pa-seen", now: 123 }), TypeError);
 });
+
+test("release removes records so a later takeNew returns the item again", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "pa-seen-"));
+  const seen = createSeenStore({ dataDir: dir, now: () => 1000 });
+  await seen.init();
+  const item = { id: "alpha:1" };
+  assert.deepEqual(await seen.takeNew([item]), [item]);
+  assert.deepEqual(await seen.takeNew([item]), []);
+  await seen.release(["alpha:1"]);
+  assert.deepEqual(await seen.takeNew([item]), [item]);
+});

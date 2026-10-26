@@ -26,29 +26,33 @@ function harness(items) {
   const desktop = [];
   const replies = [];
   const seen = new Map();
+  const dependencies = {
+    fleet: {
+      pending: () => ({ requests: items, servers: [], fetchedAt: "2026-10-25T12:00:00.000Z" }),
+      reply: async (id, decision) => { replies.push({ id, decision }); return { status: 200 }; },
+    },
+    seen: {
+      takeNew: async (fresh) => fresh.filter((item) => !seen.has(item.id) && seen.set(item.id, 1)),
+      observe: async () => {},
+    },
+    push: {
+      send: async (payload, options) => { pushed.push({ payload, options }); return { sent: 1, failed: 0, removed: 0 }; },
+      listForDevice: () => [],
+    },
+    devices: { list: () => [{ id: "dev_1", revokedAt: null }] },
+    desktop: {
+      notify: async (item) => { desktop.push(item); return item.id.endsWith(":2") ? { decision: "reject" } : null; },
+    },
+    audit: { append: async () => {} },
+  };
   return {
     pushed,
     desktop,
     replies,
-    dependencies: {
-      fleet: {
-        pending: () => ({ requests: items, servers: [], fetchedAt: "2026-10-25T12:00:00.000Z" }),
-        reply: async (id, decision) => { replies.push({ id, decision }); return { status: 200 }; },
-      },
-      seen: {
-        takeNew: async (fresh) => fresh.filter((item) => !seen.has(item.id) && seen.set(item.id, 1)),
-        observe: async () => {},
-      },
-      push: {
-        send: async (payload, options) => { pushed.push({ payload, options }); return { sent: 1, failed: 0, removed: 0 }; },
-        listForDevice: () => [],
-      },
-      devices: { list: () => [{ id: "dev_1", revokedAt: null }] },
-      desktop: {
-        notify: async (item) => { desktop.push(item); return item.id.endsWith(":2") ? { decision: "reject" } : null; },
-      },
-      audit: { append: async () => {} },
-    },
+    dependencies,
+    fleet: dependencies.fleet,
+    seen: dependencies.seen,
+    audit: dependencies.audit,
   };
 }
 
@@ -219,4 +223,92 @@ test("a digest without a desktop notifier reports zero desktop attempts", async 
   assert.equal(result.digest, true);
   assert.equal(result.desktop, 0);
   assert.equal(result.pushes, 1);
+});
+
+test("ntfy mode publishes each request and skips Web Push", async () => {
+  const published = [];
+  const harnessState = harness([request("1")]);
+  const notifications = createNotifications({
+    fleet: harnessState.fleet,
+    seen: harnessState.seen,
+    desktop: harnessState.desktop,
+    audit: harnessState.audit,
+    ntfy: { publishRequest: async (item) => published.push(item.id), sendTest: async () => ({ id: "test:1" }) },
+    digest: false,
+  });
+  const result = await notifications.announce({ id: "alpha" });
+  await flush();
+  assert.deepEqual(published, ["alpha:1"]);
+  assert.equal(result.ntfy, 1);
+  assert.equal(result.pushes, 0);
+  assert.equal(harnessState.pushed.length, 0);
+});
+
+test("ntfy mode sends more than ten requests instead of a digest", async () => {
+  const items = Array.from({ length: 11 }, (_, index) => request(String(index)));
+  const published = [];
+  const harnessState = harness([...items]);
+  const notifications = createNotifications({
+    fleet: harnessState.fleet,
+    seen: harnessState.seen,
+    desktop: harnessState.desktop,
+    audit: harnessState.audit,
+    ntfy: { publishRequest: async (item) => published.push(item.id), sendTest: async () => ({ id: "test:1" }) },
+    digest: false,
+  });
+  const result = await notifications.announce({ id: "alpha" });
+  await flush();
+  assert.equal(published.length, 11);
+  assert.equal(result.digest, false);
+});
+
+test("ntfy mode caps a poll at twenty and leaves the rest unseen", async () => {
+  const items = Array.from({ length: 21 }, (_, index) => request(String(index)));
+  const published = [];
+  const harnessState = harness([...items]);
+  const notifications = createNotifications({
+    fleet: harnessState.fleet,
+    seen: harnessState.seen,
+    desktop: harnessState.desktop,
+    audit: harnessState.audit,
+    ntfy: { publishRequest: async (item) => published.push(item.id), sendTest: async () => ({ id: "test:1" }) },
+    digest: false,
+  });
+  await notifications.announce({ id: "alpha" });
+  await flush();
+  assert.equal(published.length, 20);
+  assert.equal(await harnessState.seen.takeNew([request("20")]).then((rows) => rows.length), 1);
+});
+
+test("ntfy publish failure releases the request for the next poll", async () => {
+  const released = [];
+  const harnessState = harness([request("1")]);
+  harnessState.seen.release = async (ids) => released.push(...ids);
+  const notifications = createNotifications({
+    fleet: harnessState.fleet,
+    seen: harnessState.seen,
+    desktop: harnessState.desktop,
+    audit: harnessState.audit,
+    ntfy: {
+      publishRequest: async () => { throw new Error("offline"); },
+      sendTest: async () => ({ id: "test:1" }),
+    },
+    digest: false,
+  });
+  await notifications.announce({ id: "alpha" });
+  await flush();
+  assert.deepEqual(released, ["alpha:1"]);
+});
+
+test("sendTest uses ntfy when configured", async () => {
+  const harnessState = harness([]);
+  const notifications = createNotifications({
+    fleet: harnessState.fleet,
+    seen: harnessState.seen,
+    desktop: harnessState.desktop,
+    audit: harnessState.audit,
+    ntfy: { publishRequest: async () => {}, sendTest: async () => ({ id: "test:1" }) },
+    digest: false,
+  });
+  assert.deepEqual(await notifications.sendTest(), { sent: 1, failed: 0, pruned: 0, id: "test:1" });
 });
