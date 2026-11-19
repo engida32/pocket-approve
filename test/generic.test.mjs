@@ -66,6 +66,16 @@ test("an unanswered ask times out and leaves the queue", async () => {
   assert.equal(generic.size(), 0);
 });
 
+test("clearing the source settles every waiter", async () => {
+  const generic = createGenericSource();
+  const first = generic.ask({ title: "First?", timeoutMs: 60000 });
+  const second = generic.ask({ title: "Second?", timeoutMs: 60000 });
+  generic.clear();
+  assert.deepEqual(await first.promise, { decision: null, timedOut: true });
+  assert.deepEqual(await second.promise, { decision: null, timedOut: true });
+  assert.equal(generic.size(), 0);
+});
+
 test("attached requests share the fleet cache, replies, and pending payload", async (t) => {
   const url = await emptyUpstream(t);
   const config = normalizeConfig({
