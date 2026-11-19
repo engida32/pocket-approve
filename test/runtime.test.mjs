@@ -44,7 +44,10 @@ test("proxy runtime composes the fleet, app, and admin socket without TLS", asyn
   assert.equal(typeof runtime.app.handler, "function");
   assert.equal(runtime.app.setupHandler, undefined);
   await runtime.start();
-  assert.equal(runtime.fleet.serverCount(), 1);
+  assert.equal(runtime.fleet.serverCount(), 2);
+  const ids = runtime.fleet.servers().map((row) => row.id).sort();
+  assert.deepEqual(ids, ["local", "terminal"]);
+  assert.equal(runtime.generic.size(), 0);
   const socket = join(dataDir, "admin.sock");
   assert.equal((await stat(socket)).mode & 0o777, 0o600);
   await runtime.stop();

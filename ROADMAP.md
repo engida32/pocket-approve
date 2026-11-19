@@ -34,15 +34,15 @@ All seven v1 items are implemented and verified. The desktop path uses `gdbus`, 
 
 - [ ] iOS. Web Push for home-screen web apps, with the same action buttons where iOS allows them.
 - [ ] macOS and Windows desktop notifications.
-- [ ] A generic CLI adapter: `pocket-approve ask --title "..." --body "..."` returns once, always, or reject. Any script can call it.
-- [ ] A stable adapter API and a test harness.
+- [x] A generic CLI adapter: `pocket-approve ask --title "..." --body "..."` returns once, always, or reject. Any script can call it.
+- [x] A stable adapter API and a test harness (`test/generic.test.mjs`).
 
 ## Tool support
 
 | Tool | How it plugs in | Status |
 |---|---|---|
 | OpenCode | HTTP permission API | v1 implemented |
-| Generic CLI | `pocket-approve ask` | v2 |
+| Generic CLI | `pocket-approve ask` | v2 implemented |
 | Claude Code | Hooks, to be verified | Exploring |
 | Codex CLI | Hook or PTY wrapper, to be investigated | Exploring |
 | Gemini CLI | Adapter, to be investigated | Exploring |
