@@ -25,6 +25,7 @@
     "security"
   ],
   "files": [
+    "bin/",
     "lib/",
     "public/",
     "scripts/",
@@ -44,10 +45,14 @@
     "pair": "node scripts/admin.mjs pair",
     "devices": "node scripts/admin.mjs devices",
     "revoke": "node scripts/admin.mjs revoke",
-    "doctor": "node scripts/admin.mjs doctor"
+    "doctor": "node scripts/admin.mjs doctor",
+    "ask": "node bin/pocket-approve.mjs"
   },
   "dependencies": {
     "qrcode-terminal": "0.12.0",
     "web-push": "3.6.7"
+  },
+  "bin": {
+    "pocket-approve": "bin/pocket-approve.mjs"
   }
 }

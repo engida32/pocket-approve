@@ -33,6 +33,7 @@ Desktop notifications currently target Linux and GNOME. macOS and Windows suppor
 - A desktop notification that disappears after you act on it.
 - An audit log with a short trail of decisions.
 - A terminal fallback when no phone or desktop is available.
+- A command any script can call: `pocket-approve ask --title "Deploy?"` waits for the answer and exits with an approval code.
 - No silent approval. If nobody answers, the request stays pending.
 
 ## How it works
@@ -53,6 +54,25 @@ Pocket Approve polls each configured OpenCode server for pending permissions. Ne
 ### Local Web Push
 
 The server binds to your LAN address and serves the phone app over HTTPS with a local CA. The phone subscribes to Web Push and receives prompts even when the app is closed. No public relay is involved.
+
+### Any script: the generic adapter
+
+`pocket-approve ask` puts an arbitrary request on the same queue the OpenCode prompts use:
+
+```bash
+pocket-approve ask --title "Deploy to production?" --body "commit a1b2c3" --source ci --timeout 300
+```
+
+It connects to the running server over the admin socket, blocks until the request is answered on the phone or the desktop, and then exits:
+
+| Exit code | Meaning |
+| --- | --- |
+| `0` | Approved with `once` or `always` |
+| `1` | Rejected |
+| `2` | Usage error, or the server is not running |
+| `3` | Nobody answered before `--timeout` seconds (default 900) |
+
+The `--source` name is shown as the tool label on the phone. Timed-out requests leave the queue, and every decision lands in `data/audit.jsonl` with the action `ask`.
 
 ### ntfy relay
 
@@ -184,6 +204,7 @@ Use `--server-dir` when OpenCode stores a different project directory. Use `--fo
 | `npm run devices` | List paired devices |
 | `npm run revoke -- <id>` | Revoke a device |
 | `npm run doctor` | Check the local setup |
+| `npm run ask -- --title "Deploy?"` | Ask for approval from any script and wait for the answer |
 | `npm test` | Run the full test suite |
 | `npm run icons` | Regenerate PWA icons |
 
@@ -229,6 +250,7 @@ Read [SECURITY.md](SECURITY.md) for the threat model and reporting instructions.
 ├── REPORT.md          # historical v1 report
 ├── LICENSE
 ├── package.json
+├── bin/               # pocket-approve CLI for generic requests
 ├── lib/               # runtime, adapters, notifications, auth
 ├── public/            # phone PWA
 ├── scripts/           # setup, ntfy bridge, admin CLI
