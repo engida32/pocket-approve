@@ -10,6 +10,7 @@ Pocket Approve watches OpenCode permission requests, sends them to your phone an
 ![Tests: 284 passing](https://img.shields.io/badge/tests-284%20passing-brightgreen)
 ![License: MIT](https://img.shields.io/badge/license-MIT-blue)
 ![Node: >=20](https://img.shields.io/badge/node-%3E%3D20-blue)
+[![CI](https://github.com/engida32/pocket-approve/actions/workflows/ci.yml/badge.svg)](https://github.com/engida32/pocket-approve/actions/workflows/ci.yml)
 
 ## Status
 
