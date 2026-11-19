@@ -6,6 +6,8 @@ Pocket Approve watches OpenCode permission requests, sends them to your phone an
 
 [Project page](https://engida32.github.io/pocket-approve/)
 
+![Example notification from the landing page: a Bash permission request for npm test with Allow once, Always and Deny actions](.github/assets/screenshot.png)
+
 ![Status: v2](https://img.shields.io/badge/status-v2-brightgreen)
 ![Tests: 284 passing](https://img.shields.io/badge/tests-284%20passing-brightgreen)
 ![License: MIT](https://img.shields.io/badge/license-MIT-blue)
