@@ -1,32 +1,12 @@
-# This repository shares its root with a general workspace.
-# Track only the Pocket Approve project.
-*
-!.gitignore
-!README.md
-!REPORT.md
-!ROADMAP.md
-!SECURITY.md
-!LICENSE
-!CONTRIBUTING.md
-!CODE_OF_CONDUCT.md
-!CHANGELOG.md
-!.github/
-!.github/**
-!pocket-approve/
-!pocket-approve/**
-!docs/
-!docs/index.html
-!docs/.nojekyll
-
-# Secrets and generated state stay out even after the project folder exists.
-pocket-approve/node_modules/
-pocket-approve/data/
-pocket-approve/.env
-pocket-approve/.env.*
-pocket-approve/**/*.pem
-pocket-approve/**/*.key
-pocket-approve/**/*.crt
-pocket-approve/**/vapid.json
-pocket-approve/**/subscriptions.json
-pocket-approve/**/token
-pocket-approve/docs/superpowers/plans/
+node_modules/
+data/
+.env
+.env.*
+*.pem
+*.key
+*.crt
+**/vapid.json
+**/subscriptions.json
+**/token
+docs/superpowers/plans/
+.DS_Store

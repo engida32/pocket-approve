@@ -1,6 +1,6 @@
 {
   "name": "pocket-approve",
-  "version": "0.1.0",
+  "version": "2.0.0",
   "description": "Phone and desktop approvals for OpenCode permission prompts",
   "license": "MIT",
   "author": "Pocket Approve contributors",
@@ -15,7 +15,7 @@
   "bugs": {
     "url": "https://github.com/engida32/pocket-approve/issues"
   },
-  "homepage": "https://github.com/engida32/pocket-approve#readme",
+  "homepage": "https://engida32.github.io/pocket-approve/",
   "keywords": [
     "opencode",
     "approval",

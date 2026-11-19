@@ -70,7 +70,7 @@ The ntfy path is a relay. **ntfy.sh can read the notification content.** The HMA
 
 ```bash
 git clone https://github.com/engida32/pocket-approve.git
-cd pocket-approve/pocket-approve
+cd pocket-approve
 npm ci
 ```
 
@@ -225,12 +225,13 @@ Read [SECURITY.md](SECURITY.md) for the threat model and reporting instructions.
 ├── ROADMAP.md
 ├── REPORT.md          # historical v1 report
 ├── LICENSE
-└── pocket-approve/
-    ├── lib/           # runtime, adapters, notifications, auth
-    ├── public/        # phone PWA
-    ├── scripts/       # setup, ntfy bridge, admin CLI
-    ├── test/          # Node test suite
-    └── server.mjs
+├── package.json
+├── lib/               # runtime, adapters, notifications, auth
+├── public/            # phone PWA
+├── scripts/           # setup, ntfy bridge, admin CLI
+├── test/              # Node test suite
+├── server.mjs
+└── docs/              # project page served by GitHub Pages
 ```
 
 ## Contributing
@@ -238,7 +239,6 @@ Read [SECURITY.md](SECURITY.md) for the threat model and reporting instructions.
 Issues and pull requests are welcome. See [CONTRIBUTING.md](CONTRIBUTING.md). Run the full suite before opening a pull request:
 
 ```bash
-cd pocket-approve
 npm test
 ```
 
