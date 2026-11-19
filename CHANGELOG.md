@@ -2,7 +2,7 @@
 
 All notable changes to Pocket Approve are recorded here.
 
-## Unreleased
+## 2.0.0 - 2026-11-19
 
 ### Added
 
@@ -23,6 +23,9 @@ All notable changes to Pocket Approve are recorded here.
 
 ### Changed
 
+- The package now lives at the repository root, so `git clone && npm ci && npm test` works from a fresh checkout.
+- `homepage` points at the project page instead of the README.
+- CI covers Node 20, 22 and 24.
 - Removed the unused `trustProxy` config field.
 - Removed the temporary desktop debug logging.
 - The v2 docs now cover both the local Web Push path and the ntfy relay.
